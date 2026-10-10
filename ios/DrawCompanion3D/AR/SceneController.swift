@@ -139,7 +139,7 @@ final class SceneController: NSObject, ARSessionDelegate {
         guard let result else { throw CaptureError.noFrame }
         let (jpeg, image) = result
         let cutout = await withCheckedContinuation { (c: CheckedContinuation<CGImage?, Never>) in
-            detectQueue.async { c.resume(returning: PageScanner.cutout(image)) }
+            detectQueue.async { c.resume(returning: PageScanner.cutout(image, cropped: false)) }
         }
         return CapturedPage(jpeg: jpeg, image: image, cutout: cutout, worldCorners: world,
                             transform: transform, size: size, measured: measured)
@@ -174,7 +174,7 @@ final class SceneController: NSObject, ARSessionDelegate {
 
     func liftPortal() { portal?.lift() }
 
-    func showConcept(_ image: UIImage) { portal?.showConcept(image) }
+    func showConcept(_ cutout: CGImage) { portal?.showConcept(cutout) }
 
     func cancelPortal() {
         portal?.remove()
@@ -184,19 +184,20 @@ final class SceneController: NSObject, ARSessionDelegate {
     // MARK: Characters
 
     /// Bursts the portal and brings the character to life where the drawing was.
-    func materialize(job: CharacterJob, modelURL: URL, page: CapturedPage?) async throws -> CharacterActor {
+    func materialize(job: CharacterJob, modelURL: URL, page: CapturedPage?, usePortal: Bool = true) async throws -> CharacterActor {
         let transform = page?.transform ?? placementInFront()
         let paperLong = page.map { max($0.size.x, $0.size.y) } ?? 0.28
         let height = min(0.5, max(0.15, paperLong * 0.85))
+        let origin = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let character = try await CharacterActor.load(job: job, modelURL: modelURL, transform: transform, height: height)
         character.onSpeak = { [weak self] a, line in self?.onSpeak?(a, line) }
-        character.isWalkable = { [weak self] point in self?.isOnSurface(point, level: transform.columns.3.y) ?? true }
+        character.isWalkable = { [weak self] point in self?.isOnSurface(point, origin: origin) ?? true }
         character.root.isEnabled = false
         arView.scene.addAnchor(character.anchor)
         _ = arView.installGestures([.scale], for: character.root)
         actors.append(character)
 
-        if let portal {
+        if usePortal, let portal {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 portal.dissolve {
                     character.root.isEnabled = true
@@ -215,7 +216,7 @@ final class SceneController: NSObject, ARSessionDelegate {
 
     /// Places a saved character on the surface in the middle of the screen.
     func place(job: CharacterJob, modelURL: URL) async throws -> CharacterActor {
-        try await materialize(job: job, modelURL: modelURL, page: nil)
+        try await materialize(job: job, modelURL: modelURL, page: nil, usePortal: false)
     }
 
     func removeAll() {
@@ -232,12 +233,13 @@ final class SceneController: NSObject, ARSessionDelegate {
     }
 
     /// True if there's real surface under `point` at about the same height.
-    private func isOnSurface(_ point: SIMD3<Float>, level: Float) -> Bool {
+    private func isOnSurface(_ point: SIMD3<Float>, origin: SIMD3<Float>) -> Bool {
+        let level = origin.y
         let query = ARRaycastQuery(origin: point + [0, 0.15, 0], direction: [0, -1, 0],
                                    allowing: .existingPlaneGeometry, alignment: .horizontal)
         guard let hit = arView.session.raycast(query).first else {
-            // No plane geometry yet: allow small steps, refuse long ones.
-            return true
+            // No plane geometry here (yet): only allow short trips from where it was born.
+            return simd_distance(SIMD2(point.x, point.z), SIMD2(origin.x, origin.z)) < 0.25
         }
         return abs(hit.worldTransform.columns.3.y - level) < 0.04
     }

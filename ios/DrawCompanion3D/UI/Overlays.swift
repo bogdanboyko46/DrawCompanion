@@ -4,16 +4,21 @@ import SwiftUI
 /// A glowing outline on the detected paper, so you know it's been found.
 struct PageOutline: View {
     var points: [CGPoint]
-    @State private var pulse = false
 
     var body: some View {
+        TimelineView(.animation) { timeline in
+            canvas(pulse: 0.5 + 0.5 * sin(timeline.date.timeIntervalSinceReferenceDate * 5.5))
+        }
+    }
+
+    private func canvas(pulse: Double) -> some View {
         Canvas { context, _ in
             guard points.count == 4 else { return }
             var path = Path()
             path.addLines(points)
             path.closeSubpath()
             let color = Color(red: 1, green: 0.7, blue: 0.35)
-            context.fill(path, with: .color(color.opacity(pulse ? 0.12 : 0.05)))
+            context.fill(path, with: .color(color.opacity(0.05 + 0.08 * pulse)))
             context.stroke(path, with: .color(color.opacity(0.35)), style: StrokeStyle(lineWidth: 10, lineJoin: .round))
             context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
             // Corner ticks.
@@ -21,19 +26,17 @@ struct PageOutline: View {
                 context.fill(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)), with: .color(.white))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: points)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.1).repeatForever()) { pulse = true }
-        }
     }
 }
 
 /// Speech bubbles that follow each character's head.
 struct SpeechLayer: View {
-    var lines: [SpeechLine]
-    var heads: [String: CGPoint]
+    // Reads the model itself so 30 Hz head updates only re-render this layer.
+    @Environment(AppModel.self) private var model
 
     var body: some View {
+        let lines = Array(model.speech.values)
+        let heads = model.heads
         GeometryReader { _ in
             ForEach(lines) { line in
                 if let p = heads[line.characterID] {

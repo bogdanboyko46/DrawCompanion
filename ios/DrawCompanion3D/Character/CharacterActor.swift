@@ -115,7 +115,10 @@ final class CharacterActor {
             }
         }
         // Fill gaps so the brain can always ask for the basics.
-        if clips["idle"] == nil, let loop = clips.values.first(where: { $0.clip.loop }) { clips["idle"] = loop }
+        if clips["idle"] == nil {
+            let calm = clips.first { $0.value.clip.loop && !["walk", "run"].contains($0.key) }?.value
+            if let loop = calm ?? clips.values.first(where: { $0.clip.loop }) { clips["idle"] = loop }
+        }
         if clips["walk"] == nil, let run = clips["run"] { clips["walk"] = run }
         if clips["greet"] == nil, let happy = clips["happy"] { clips["greet"] = happy }
     }

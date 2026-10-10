@@ -25,17 +25,18 @@ final class PaperPortal {
     private var time: TimeInterval = 0
     private var conceptFade: Float = -1
     private var dissolving: (start: TimeInterval, done: () -> Void)?
+    private var dissolved = false
     private let cardHeight: Float
 
     init(page: CapturedPage) {
         self.page = page
         anchor = AnchorEntity(world: page.transform)
 
+        // The cutout keeps the page's frame, so the flat card covers the paper
+        // exactly and the figure sits right on top of the drawn one.
         let source = page.cutout ?? page.image
-        let aspect = Float(source.width) / Float(max(1, source.height))
-        // The standing card is roughly figure-sized: most of the paper's height.
-        cardHeight = max(0.08, min(page.size.y, page.size.x / aspect) * (page.cutout == nil ? 0.8 : 0.9))
-        card = PaperPortal.makeCard(image: source, width: cardHeight * aspect, height: cardHeight)
+        cardHeight = max(0.08, page.size.y)
+        card = PaperPortal.makeCard(image: source, width: page.size.x, height: page.size.y)
 
         // Halo: a soft rounded glow lying on the paper.
         glow = ModelEntity(
@@ -53,6 +54,7 @@ final class PaperPortal {
         emitter.emitterShape = .plane
         emitter.emitterShapeSize = [page.size.x, 0.001, page.size.y]
         emitter.mainEmitter.birthRate = 0
+        PaperPortal.scaleToTabletop(&emitter)
         sparkles.components.set(emitter)
         anchor.addChild(sparkles)
     }
@@ -80,13 +82,14 @@ final class PaperPortal {
         sweep = nil
         setEmission(40)
         var t = Transform()
-        t.translation = [0, cardHeight / 2 + 0.02, 0]
+        t.translation = [0, cardHeight * 0.8 / 2 + 0.02, 0]
+        t.scale = SIMD3(repeating: 0.8)
         card.move(to: t, relativeTo: pivot, duration: 1.4, timingFunction: .easeInOut)
     }
 
-    func showConcept(_ image: UIImage) {
-        guard concept == nil, let source = image.cgImage else { return }
-        let cg = PageScanner.cutout(source) ?? source
+    /// `cg` should already be cut out (do that off the main thread).
+    func showConcept(_ cg: CGImage) {
+        guard concept == nil else { return }
         let aspect = Float(cg.width) / Float(max(1, cg.height))
         let entity = PaperPortal.makeCard(image: cg, width: cardHeight * aspect, height: cardHeight)
         entity.components.set(OpacityComponent(opacity: 0))
@@ -100,6 +103,7 @@ final class PaperPortal {
 
     /// Pops the card and calls `done` at the moment the character should appear.
     func dissolve(done: @escaping () -> Void) {
+        dissolved = true
         dissolving = (time, done)
         setEmission(0)
         burst()
@@ -109,7 +113,18 @@ final class PaperPortal {
     }
 
     func remove() {
+        // Never strand a character waiting for this portal to burst.
+        if let d = dissolving {
+            dissolving = nil
+            d.done()
+        }
         anchor.removeFromParent()
+    }
+
+    /// The presets are tuned for room-sized effects; this is a sheet of paper.
+    static func scaleToTabletop(_ e: inout ParticleEmitterComponent) {
+        e.mainEmitter.size *= 0.15
+        e.speed *= 0.2
     }
 
     // MARK: Per frame
@@ -122,9 +137,9 @@ final class PaperPortal {
             let yaw = atan2(local.x, local.z)
             let current = pivot.orientation
             pivot.orientation = simd_slerp(current, simd_quatf(angle: yaw, axis: [0, 1, 0]), Float(min(1, dt * 3)))
-            if time - liftStart > 1.4, dissolving == nil {
+            if time - liftStart > 1.4, !dissolved {
                 let bob = Float(sin((time - liftStart) * 1.7)) * 0.006
-                card.position.y = cardHeight / 2 + 0.02 + bob
+                card.position.y = cardHeight * 0.8 / 2 + 0.02 + bob
             }
         }
         if conceptFade >= 0, conceptFade < 1, let concept {
@@ -173,8 +188,9 @@ final class PaperPortal {
         var e = ParticleEmitterComponent.Presets.impact
         e.emitterShape = .sphere
         e.emitterShapeSize = [cardHeight * 0.4, cardHeight * 0.4, cardHeight * 0.4]
+        PaperPortal.scaleToTabletop(&e)
         pop.components.set(e)
-        pop.position = [0, cardHeight / 2 + 0.02, 0]
+        pop.position = [0, cardHeight * 0.8 / 2 + 0.02, 0]
         anchor.addChild(pop)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { pop.removeFromParent() }
     }
@@ -183,10 +199,13 @@ final class PaperPortal {
     static func makeCard(image: CGImage, width: Float, height: Float) -> ModelEntity {
         let w = width / 2, h = height / 2
         var d = MeshDescriptor(name: "card")
-        d.positions = MeshBuffers.Positions([[-w, h, 0], [w, h, 0], [w, -h, 0], [-w, -h, 0]])
-        d.normals = MeshBuffers.Normals([[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1]])
+        let positions: [SIMD3<Float>] = [[-w, h, 0], [w, h, 0], [w, -h, 0], [-w, -h, 0]]
+        let normals: [SIMD3<Float>] = Array(repeating: [0, 0, 1], count: 4)
+        let uvs: [SIMD2<Float>] = [[0, 1], [1, 1], [1, 0], [0, 0]]
+        d.positions = MeshBuffers.Positions(positions)
+        d.normals = MeshBuffers.Normals(normals)
         // RealityKit samples with v up (USD convention): the image's top row is v = 1.
-        d.textureCoordinates = MeshBuffers.TextureCoordinates([[0, 1], [1, 1], [1, 0], [0, 0]])
+        d.textureCoordinates = MeshBuffers.TextureCoordinates(uvs)
         // Both windings, so the card reads from behind too.
         d.primitives = .triangles([0, 3, 2, 0, 2, 1, 0, 2, 3, 0, 1, 2])
         let mesh = (try? MeshResource.generate(from: [d])) ?? .generatePlane(width: width, height: height)

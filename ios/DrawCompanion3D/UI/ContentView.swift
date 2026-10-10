@@ -16,7 +16,7 @@ struct ContentView: View {
                     .transition(.opacity)
             }
 
-            SpeechLayer(lines: Array(model.speech.values), heads: model.heads)
+            SpeechLayer()
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 

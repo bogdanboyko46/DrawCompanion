@@ -103,14 +103,16 @@ final class AppModel {
     }
 
     func retryFailed() {
-        guard let id = failedJobID else { return }
+        guard let id = failedJobID, phase == .scanning || phase == .alive else { return }
         errorMessage = nil
         failedJobID = nil
+        phase = .making
+        scene.detectionEnabled = false
         Task {
+            defer { scene.detectionEnabled = true }
             do {
                 let job = try await api.retry(id)
                 self.job = job
-                phase = .making
                 if let page { scene.beginPortal(for: page) }
                 try await follow(job)
             } catch {
@@ -145,11 +147,12 @@ final class AppModel {
                 conceptRequested = true
                 Task {
                     let image = try? await api.image(at: url)
-                    if let image {
-                        conceptImage = image
-                        scene.showConcept(image)
-                        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-                    }
+                    guard let image, let cg = image.cgImage else { return }
+                    // Vision is slow; keep it off the main thread.
+                    let cut = await Task.detached { PageScanner.cutout(cg) ?? cg }.value
+                    conceptImage = image
+                    scene.showConcept(cut)
+                    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
                 }
             }
         }
@@ -188,6 +191,10 @@ final class AppModel {
 
     func place(_ job: CharacterJob) {
         showLibrary = false
+        guard phase == .scanning || phase == .alive else {
+            errorMessage = "Wait for the current character to finish, then place this one."
+            return
+        }
         Task {
             do {
                 let url = try await local.save(job, using: api)

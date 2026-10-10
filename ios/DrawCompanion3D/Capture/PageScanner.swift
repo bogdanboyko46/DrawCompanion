@@ -113,27 +113,31 @@ enum PageScanner {
         guard let pixel = avg.outputImage else { return image }
         var rgba = [UInt8](repeating: 0, count: 4)
         ciContext.render(pixel, toBitmap: &rgba, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                         format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-        // The average includes ink, so lift it toward the paper before using it as white.
-        let paper = rgba.prefix(3).map { min(1, max(0.35, Double($0) / 255 * 1.08)) }
-        let adjust = CIFilter.whitePointAdjust()
-        adjust.inputImage = image
-        adjust.color = CIColor(red: paper[0], green: paper[1], blue: paper[2])
+                         format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
+        // The average includes ink, so lift it toward the paper before using it as white,
+        // then divide it out (Core Image filters work in linear light).
+        let paper = rgba.prefix(3).map { CGFloat(min(1, max(0.35, Double($0) / 255 * 1.08))) }
+        let gain = CIFilter.colorMatrix()
+        gain.inputImage = image
+        gain.rVector = CIVector(x: 1 / paper[0], y: 0, z: 0, w: 0)
+        gain.gVector = CIVector(x: 0, y: 1 / paper[1], z: 0, w: 0)
+        gain.bVector = CIVector(x: 0, y: 0, z: 1 / paper[2], w: 0)
         let controls = CIFilter.colorControls()
-        controls.inputImage = adjust.outputImage ?? image
+        controls.inputImage = gain.outputImage ?? image
         controls.contrast = 1.08
         controls.saturation = 1.12
         return controls.outputImage ?? image
     }
 
     /// Lifts the drawn figure off the paper so it can float as a cutout.
-    static func cutout(_ image: CGImage) -> CGImage? {
+    /// `cropped: false` keeps the page's frame, so the cutout lines up with the paper.
+    static func cutout(_ image: CGImage, cropped: Bool = true) -> CGImage? {
         let request = VNGenerateForegroundInstanceMaskRequest()
         let handler = VNImageRequestHandler(cgImage: image)
         do {
             try handler.perform([request])
             guard let obs = request.results?.first, !obs.allInstances.isEmpty else { return nil }
-            let masked = try obs.generateMaskedImage(ofInstances: obs.allInstances, from: handler, croppedToInstancesExtent: true)
+            let masked = try obs.generateMaskedImage(ofInstances: obs.allInstances, from: handler, croppedToInstancesExtent: cropped)
             let ci = CIImage(cvPixelBuffer: masked)
             return ciContext.createCGImage(ci, from: ci.extent)
         } catch {
