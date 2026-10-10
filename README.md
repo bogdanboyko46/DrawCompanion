@@ -1,6 +1,6 @@
 # DrawCompanion
 
-An AR drawing assistant. You draw on real paper wearing a lightweight headset (your phone in a head-mounted viewer). When you're stuck, look at the spot, box it with two taps, and say what you want. An outline matched to your drawing appears in the box. Not right? Tap and say what to change. Once you stop drawing on it for 3 seconds, it clears.
+An AR drawing assistant. You draw on real paper wearing a lightweight headset (your phone in a head-mounted viewer). The microphone is always on: just talk ("I'm stuck, maybe a cat on the windowsill?"). The AI never talks back. It draws an outline on your paper wherever it fits best, changes it when you say so ("bigger, facing left"), clears it when asked, and ignores everything else you say. Once you stop drawing on the outline for 3 seconds, it clears.
 
 Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
@@ -11,37 +11,37 @@ Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
    ```bash
    npm install
-   npm run mock   # canned suggestion (a flower), no API calls; for trying the flow
-   npm start      # real suggestions (uses ANTHROPIC_API_KEY or an `ant auth login` profile)
+   npm run mock   # canned AI (draws a flower, reacts to "bigger"/"smaller"/"clear"), no API calls
+   npm start      # real AI (uses ANTHROPIC_API_KEY or an `ant auth login` profile)
    ```
 
 3. **Open it on the phone.** Camera and microphone access need a secure context: `localhost` on the same machine, or HTTPS (for example through a tunnel) from the phone. Chrome on Android gives the best results (speech input, fullscreen, landscape lock).
 
 ## Using it
 
-**Headset view** (tap *Headset view*, put the phone in the viewer):
+**Headset view:** tap *Headset view*, allow the microphone, and put the phone in the viewer. From then on it's all speech:
 
-| You're… | Tap the viewer button to… |
+| Say something like… | What happens |
 |---|---|
-| Ready | Start a box where the dot is |
-| Boxing | Finish the box at the dot; it then listens for your request |
-| Listening | Stop listening |
-| Seeing an outline | Say a change: "smaller", "facing left", "next idea", "hide" |
+| "I'm stuck, what could go here?" / "add a cat on the windowsill" | A new outline appears where the AI thinks it fits |
+| "bigger" / "move it left of the house" / "no, a pine tree" | The current outline changes |
+| "clear it" / "got it" | The outline goes away |
+| Anything else (thinking aloud, talking to someone) | Nothing |
 
-Say "some ideas for…" to get 3 options, or "just the guides for…" for construction lines only.
+A small dot low in each eye shows status: green listening, pulsing blue working, orange can't see the page, grey microphone off. Exit fullscreen to leave the headset view.
 
-**Phone view:** drag a box on the page, then type or tap 🎤. After a suggestion appears, use *Change it* for feedback.
+**Phone view:** tap *Start listening*, or type what you'd say and press Enter.
 
-Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (default `claude-opus-5-5`), `DRAWCOMPANION_EFFORT` (default `low`, tuned for response speed).
+Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (default `claude-opus-5-5`), `DRAWCOMPANION_EFFORT` (default `low`, tuned for response speed), `DRAWCOMPANION_MOCK_DELAY_MS` (mock mode only: simulated AI latency).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `server/suggest.js` | Prompt, output schema, Claude call (requests and feedback revisions); sanitizes strokes |
-| `server/index.js` | Static file server and `POST /api/suggest` |
-| `server/mock.js` | Canned response for trying the flow without API calls |
-| `public/app.js` | Camera, headset/phone views, look-and-tap, voice, requests, rendering |
+| `server/suggest.js` | Prompt, output schema, and Claude call: decides new / revise / hide / ignore and returns strokes |
+| `server/index.js` | Static file server and `POST /api/turn` (cancels the model call if a newer turn supersedes it) |
+| `server/mock.js` | Canned decisions for trying the flow without API calls |
+| `public/app.js` | Camera, headset/phone views, always-on voice, turns, rendering |
 | `public/tracking.js` | Finds the template's markers every frame and computes the page pose |
 | `public/board.js` | Template geometry: frame size and marker positions in paper units |
 | `public/template.html` | The printable template |

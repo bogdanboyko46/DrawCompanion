@@ -21,37 +21,16 @@
           <option value="letter">US Letter template</option>
         </select>
         <a id="template" href="template.html?size=a4" target="_blank">Print template</a>
+      </div>
+      <div class="row">
+        <button id="listen">Start listening</button>
         <button id="enter-headset" class="primary">Headset view</button>
+        <button id="hide" disabled>Hide outline</button>
       </div>
-
       <div class="row">
-        <input id="request" type="text" placeholder="Drag a box on the page, then: e.g. “a cat sitting here”">
-        <button id="mic" title="Talk" aria-label="Talk">🎤</button>
+        <input id="say" type="text" placeholder="Or type what you'd say, then Enter">
       </div>
-
-      <div class="row">
-        <div id="modes" role="radiogroup" aria-label="Suggestion type">
-          <label><input type="radio" name="mode" value="outline" checked> Outline</label>
-          <label><input type="radio" name="mode" value="scaffold"> Guides only</label>
-          <label><input type="radio" name="mode" value="options"> 3 ideas</label>
-        </div>
-        <button id="ask">Suggest</button>
-      </div>
-
-      <div id="result" hidden>
-        <p id="understood"></p>
-        <div id="palette"></div>
-        <ol id="steps"></ol>
-        <div class="row">
-          <input id="feedback" type="text" placeholder="Not quite? e.g. “smaller, facing left”">
-          <button id="change">Change it</button>
-        </div>
-        <div class="row">
-          <button id="prev" hidden>‹ Idea</button>
-          <button id="next" hidden>Idea ›</button>
-          <button id="dismiss">Hide outline</button>
-        </div>
-      </div>
+      <p id="heard"></p>
     </section>
   </main>
   <script src="vendor/js-aruco2/cv.js"></script>

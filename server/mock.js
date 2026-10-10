@@ -1,13 +1,28 @@
-// Canned response with the same shape as suggest(), so the client can be
-// developed and demoed without API calls. Draws a simple flower sized to the
-// marked region (or the lower-right quarter of the page).
+// Canned decisions with the same shape as decide(), so the client can be
+// developed and demoed without API calls. Words decide the action; anything
+// that sounds like a request draws a simple flower in the lower right.
 
-export function mockSuggestion({ region, paper, mode, revision }) {
-  const box = region ?? { x: paper.w * 0.55, y: paper.h * 0.55, w: paper.w * 0.35, h: paper.h * 0.35 };
+export function mockDecision({ paper, utterances, current }) {
+  const said = utterances.join(" ").toLowerCase();
+  if (/\b(clear|hide|never ?mind|got it)\b/.test(said)) {
+    return { action: current ? "hide" : "ignore", note: "mock: hide words", suggestion: null };
+  }
+  const asks = /\b(add|draw|put|make|give|show|stuck|what)\b/.test(said);
+  if (!asks) return { action: "ignore", note: "mock: not a request", suggestion: null };
+
+  const revising = !!current && /\b(bigger|smaller|move|make it|instead)\b/.test(said);
+  const scale = /\bbigger\b/.test(said) ? 1.3 : /\bsmaller\b/.test(said) ? 0.7 : 1;
+  const base = current?.suggestion.placement ?? { x: paper.w * 0.55, y: paper.h * 0.55, w: paper.w * 0.35, h: paper.h * 0.35 };
+  const box = revising
+    ? { x: base.x + (base.w * (1 - scale)) / 2, y: base.y + (base.h * (1 - scale)) / 2, w: base.w * scale, h: base.h * scale }
+    : base;
+  return { action: revising ? "revise" : "new", note: "mock: flower", suggestion: flower(box) };
+}
+
+function flower(box) {
   const cx = box.x + box.w / 2;
   const s = Math.min(box.w, box.h);
   const headY = box.y + s * 0.3;
-
   const circle = (x, y, rad, n = 24) =>
     Array.from({ length: n }, (_, i) => {
       const a = (i / n) * Math.PI * 2;
@@ -26,49 +41,27 @@ export function mockSuggestion({ region, paper, mode, revision }) {
     }
     return pts;
   };
-
-  const strokes = [
-    { role: "construction", points: circle(cx, headY, s * 0.27), closed: true, weight: "light" },
-    { role: "construction", points: [[cx, headY], [cx, box.y + box.h]], closed: false, weight: "light" },
-    { role: "contour", points: circle(cx, headY, s * 0.08, 16), closed: true, weight: "medium" },
-    ...Array.from({ length: 6 }, (_, i) => ({
-      role: "contour",
-      points: petal((i / 6) * Math.PI * 2),
-      closed: true,
-      weight: "medium",
-    })),
-    {
-      role: "contour",
-      points: Array.from({ length: 10 }, (_, i) => {
-        const t = i / 9;
-        return [cx + Math.sin(t * Math.PI) * s * 0.04, headY + s * 0.27 + t * (box.y + box.h - headY - s * 0.27)];
-      }),
-      closed: false,
-      weight: "medium",
-    },
-  ];
-
-  const suggestion = {
-    title: "Six-petal flower",
-    placement: box,
-    strokes: mode === "scaffold" ? strokes.filter((st) => st.role === "construction") : strokes,
-    palette: [
-      { hex: "#e8a33d", use: "petals" },
-      { hex: "#6b4f2a", use: "center" },
-      { hex: "#4f7a3a", use: "stem" },
-    ],
-    steps: ["Lightly draw the guide circle and stem line", "Add the center, then the petals", "Draw the stem"],
-  };
-  if (revision) {
-    return {
-      understood: `Mock revision for: "${revision.feedback.at(-1)}" (mock mode returns the same flower).`,
-      style_notes: "Mock response; no image analysis was done.",
-      suggestions: [suggestion],
-    };
-  }
   return {
-    understood: "Mock mode: a flower placed in the marked box.",
-    style_notes: "Mock response; no image analysis was done.",
-    suggestions: mode === "options" ? [suggestion, suggestion, suggestion] : [suggestion],
+    placement: box,
+    strokes: [
+      { role: "construction", points: circle(cx, headY, s * 0.27), closed: true, weight: "light" },
+      { role: "construction", points: [[cx, headY], [cx, box.y + box.h]], closed: false, weight: "light" },
+      { role: "contour", points: circle(cx, headY, s * 0.08, 16), closed: true, weight: "medium" },
+      ...Array.from({ length: 6 }, (_, i) => ({
+        role: "contour",
+        points: petal((i / 6) * Math.PI * 2),
+        closed: true,
+        weight: "medium",
+      })),
+      {
+        role: "contour",
+        points: Array.from({ length: 10 }, (_, i) => {
+          const t = i / 9;
+          return [cx + Math.sin(t * Math.PI) * s * 0.04, headY + s * 0.27 + t * (box.y + box.h - headY - s * 0.27)];
+        }),
+        closed: false,
+        weight: "medium",
+      },
+    ],
   };
 }
