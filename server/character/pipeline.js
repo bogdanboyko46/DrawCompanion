@@ -153,7 +153,6 @@ export async function runCharacterJob(job, { director, meshy, packer, store }) {
         should_remesh: true,
         target_polycount: POLYCOUNT,
         topology: "triangle",
-        remove_lighting: true,
         target_formats: ["glb", "usdz"],
         ...(sheet.riggable ? { pose_mode: "t-pose" } : {}),
       };

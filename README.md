@@ -2,7 +2,9 @@
 
 An AR drawing assistant. You draw on real paper, and when you're stuck you ask for a suggestion. An outline that matches your drawing's style and colors appears on the paper, locked in place. Trace it, and it fades away.
 
-This repo has a working **"magic window" prototype**: a phone or tablet camera over your page stands in for the headset. It also has a design doc that critiques the concept and lays out the path to a headset version: **[docs/DESIGN.md](docs/DESIGN.md)**.
+**New: drawings come to life.** Point the iOS app at a character you drew and it becomes a detailed, rigged, animated 3D character standing on your desk. See **[ios/README.md](ios/README.md)** and the design note **[docs/CHARACTERS.md](docs/CHARACTERS.md)**.
+
+This repo also has a working **"magic window" prototype**: a phone or tablet camera over your page stands in for the headset. It also has a design doc that critiques the concept and lays out the path to a headset version: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 ## How it works
 
@@ -41,6 +43,9 @@ Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (
 | `server/suggest.js` | Prompt, output schema, and Claude call; sanitizes returned strokes |
 | `server/index.js` | Static file server and `POST /api/suggest` |
 | `server/mock.js` | Canned response for offline UI work |
+| `server/character/` | Drawing → 3D character pipeline: Claude art director, Meshy client, resumable jobs, Blender USDZ packer, mock backends |
+| `ios/` | Native ARKit + RealityKit app that brings drawings to life (Xcode project) |
+| `scripts/make_mock_character.py` | Builds the rigged sample character used in mock mode |
 | `public/geometry.js` | Homography (paper ⇄ camera) and page rectification |
 | `public/completion.js` | Decides when an outline has been traced (thin-line test, occlusion, lighting) |
 | `public/app.js` | Camera, calibration, asking, rendering, fade-out |
@@ -52,4 +57,4 @@ Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (
 npm test
 ```
 
-Covers the homography math, page rectification, and the completion tracker: tracing, partial progress, stray ink, a hand over the outline, page-wide changes, and lighting shifts.
+Covers the homography math, page rectification, and the completion tracker: tracing, partial progress, stray ink, a hand over the outline, page-wide changes, and lighting shifts. The character tests cover the full pipeline against mock backends: every stage, the static fallback for non-humanoids and failed rigs, resuming without re-paying, the concept repaint, and early rejection of pages with no character.
