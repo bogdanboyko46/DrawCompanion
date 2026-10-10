@@ -127,7 +127,7 @@ final class AppModel: ObservableObject {
         inflight = Task { [weak self] in
             do {
                 try await backend.run(utterances: utterances, current: current, pageJPEG: jpeg, paper: paper) { event in
-                    await self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper)
+                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper)
                 }
             } catch {
                 guard let self, id == self.turnID, !Task.isCancelled else { return }
