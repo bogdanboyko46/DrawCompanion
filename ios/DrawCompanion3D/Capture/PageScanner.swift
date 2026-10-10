@@ -19,8 +19,10 @@ struct DetectedPage: Sendable {
 struct CapturedPage {
     var jpeg: Data
     var image: CGImage
-    /// Just the drawn figure on a transparent background, when Vision can find it.
+    /// Just the drawn figure on a transparent background, page-framed.
     var cutout: CGImage?
+    /// Just the figure, cropped onto white: what gets sent for generation.
+    var figureJPEG: Data?
     /// World-space corners (TL, TR, BR, BL as seen on screen). Nil if the
     /// paper couldn't be raycast; a stand-in rectangle is used instead.
     var worldCorners: [SIMD3<Float>]
@@ -142,14 +144,136 @@ enum PageScanner {
         return rgba.prefix(3).map { CGFloat($0) }
     }
 
-    /// Lifts the drawing off the paper so it can float as a cutout, keeping the
-    /// page's frame so it lines up with the paper.
-    ///
-    /// Everything that's ink stays (subject-lift alone drops thin lines like
-    /// stick arms); Vision's subject mask is added on top so solid white parts
-    /// of the character don't turn see-through.
-    static func cutout(_ image: CGImage) -> CGImage? {
+    /// The one figure on the page, separated from everything else on the paper.
+    struct Isolated {
+        /// Page-sized, transparent except the figure (lines up with the paper for the reveal).
+        var cutout: CGImage
+        /// Just the figure, cropped, on pure white: what gets sent to generation.
+        var figure: CGImage
+        var figureJPEG: Data
+        /// Where the figure is on the page, as fractions with a top-left origin.
+        var box: CGRect
+    }
+
+    /// Finds the single main figure and drops everything else: paper edges and
+    /// shadows, specks, writing, and other doodles. Strokes that are close
+    /// together (a stick arm next to a body) count as one figure.
+    static func isolate(_ image: CGImage) -> Isolated? {
         let source = CIImage(cgImage: image)
+        let e = source.extent
+        let drawn = drawnMask(source, image)
+
+        // Work on a coarse grid to find connected shapes. Bitmap row 0 is the top.
+        let gw = 160, gh = max(8, Int((CGFloat(gw) * e.height / e.width).rounded()))
+        let small = drawn.transformed(by: CGAffineTransform(scaleX: CGFloat(gw) / e.width, y: CGFloat(gh) / e.height))
+        var px = [UInt8](repeating: 0, count: gw * gh * 4)
+        ciContext.render(small, toBitmap: &px, rowBytes: gw * 4, bounds: CGRect(x: 0, y: 0, width: gw, height: gh),
+                         format: .RGBA8, colorSpace: nil)
+        // Ignore a thin band at the page edge: that's where paper edges, table and shadow show up.
+        let border = max(2, gw * 3 / 100)
+        var ink = [Bool](repeating: false, count: gw * gh)
+        for y in border..<(gh - border) {
+            for x in border..<(gw - border) where px[(y * gw + x) * 4] > 90 { ink[y * gw + x] = true }
+        }
+        // Bridge small gaps so a figure drawn with separate strokes stays one shape.
+        let reach = 3
+        var grown = [Bool](repeating: false, count: gw * gh)
+        for y in 0..<gh {
+            for x in 0..<gw where ink[y * gw + x] {
+                for dy in -reach...reach {
+                    for dx in -reach...reach {
+                        let nx = x + dx, ny = y + dy
+                        if nx >= 0, ny >= 0, nx < gw, ny < gh { grown[ny * gw + nx] = true }
+                    }
+                }
+            }
+        }
+        // Connected shapes; keep the one with the most ink, favoring the middle of the page.
+        var label = [Int](repeating: -1, count: gw * gh)
+        var best = (score: 0.0, id: -1)
+        var count = 0
+        for start in 0..<(gw * gh) where grown[start] && label[start] < 0 {
+            var stack = [start]
+            label[start] = count
+            var inkCount = 0, sx = 0, sy = 0
+            while let i = stack.popLast() {
+                if ink[i] { inkCount += 1; sx += i % gw; sy += i / gw }
+                let x = i % gw, y = i / gw
+                for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                where nx >= 0 && ny >= 0 && nx < gw && ny < gh && grown[ny * gw + nx] && label[ny * gw + nx] < 0 {
+                    label[ny * gw + nx] = count
+                    stack.append(ny * gw + nx)
+                }
+            }
+            if inkCount > 0 {
+                let cx = Double(sx) / Double(inkCount) / Double(gw) - 0.5
+                let cy = Double(sy) / Double(inkCount) / Double(gh) - 0.5
+                let score = Double(inkCount) * (1.2 - min(1, (cx * cx + cy * cy).squareRoot()))
+                if score > best.score { best = (score, count) }
+            }
+            count += 1
+        }
+        guard best.id >= 0 else { return nil }
+
+        // The chosen shape as a mask, and its bounding box.
+        var region = [UInt8](repeating: 0, count: gw * gh)
+        var minX = gw, minY = gh, maxX = -1, maxY = -1
+        for i in 0..<(gw * gh) where label[i] == best.id {
+            region[i] = 255
+            if ink[i] {
+                let x = i % gw, y = i / gw
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        let inkArea = Double((maxX - minX + 1) * (maxY - minY + 1)) / Double(gw * gh)
+        guard maxX >= minX, inkArea > 0.002 else { return nil }
+
+        let regionImage = CIImage(bitmapData: Data(region), bytesPerRow: gw, size: CGSize(width: gw, height: gh),
+                                  format: .L8, colorSpace: nil)
+            .transformed(by: CGAffineTransform(scaleX: e.width / CGFloat(gw), y: e.height / CGFloat(gh)))
+            .applyingGaussianBlur(sigma: e.width / CGFloat(gw))
+            .cropped(to: e)
+        let keep = CIFilter.multiplyCompositing()
+        keep.inputImage = drawn
+        keep.backgroundImage = regionImage
+        let mask = keep.outputImage ?? drawn
+
+        // Box in page fractions (top-left origin), padded a little.
+        let pad = 0.03
+        let box = CGRect(x: Double(minX) / Double(gw), y: Double(minY) / Double(gh),
+                         width: Double(maxX - minX + 1) / Double(gw), height: Double(maxY - minY + 1) / Double(gh))
+            .insetBy(dx: -pad, dy: -pad)
+            .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+
+        // Page-framed cutout for the reveal.
+        let clear = CIFilter.blendWithMask()
+        clear.inputImage = source
+        clear.backgroundImage = CIImage.empty()
+        clear.maskImage = mask
+        // The figure alone on white, cropped to its box with some breathing room.
+        let white = CIImage(color: .white).cropped(to: e)
+        let onWhite = CIFilter.blendWithMask()
+        onWhite.inputImage = source
+        onWhite.backgroundImage = white
+        onWhite.maskImage = mask
+        let crop = CGRect(x: e.minX + box.minX * e.width, y: e.minY + (1 - box.maxY) * e.height,
+                          width: box.width * e.width, height: box.height * e.height).integral
+        let margin = max(crop.width, crop.height) * 0.12
+        let canvas = crop.insetBy(dx: -margin, dy: -margin)
+        guard let cutoutOut = clear.outputImage, let figureOut = onWhite.outputImage,
+              let cutout = ciContext.createCGImage(cutoutOut.cropped(to: e), from: e),
+              let figure = ciContext.createCGImage(
+                  figureOut.cropped(to: crop).composited(over: CIImage(color: .white).cropped(to: canvas)), from: canvas),
+              let jpeg = ciContext.jpegRepresentation(
+                  of: CIImage(cgImage: figure), colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                  options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.9])
+        else { return nil }
+        return Isolated(cutout: cutout, figure: figure, figureJPEG: jpeg, box: box)
+    }
+
+    /// Everything that's ink, plus Vision's subject mask so solid white parts
+    /// of a character don't count as paper. Subject lift alone drops thin lines.
+    static func drawnMask(_ source: CIImage, _ image: CGImage) -> CIImage {
         var mask = inkMask(source)
         let request = VNGenerateForegroundInstanceMaskRequest()
         let handler = VNImageRequestHandler(cgImage: image)
@@ -161,12 +285,12 @@ enum PageScanner {
             union.backgroundImage = mask
             mask = union.outputImage ?? mask
         }
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = source
-        blend.backgroundImage = CIImage.empty()
-        blend.maskImage = mask
-        guard let out = blend.outputImage else { return nil }
-        return ciContext.createCGImage(out.cropped(to: source.extent), from: source.extent)
+        return mask.cropped(to: source.extent)
+    }
+
+    /// Transparent-background version of an image (used for the concept render).
+    static func cutout(_ image: CGImage) -> CGImage? {
+        isolate(image)?.cutout
     }
 
     /// 1 where something is drawn, 0 on blank paper, soft at the edges.

@@ -196,27 +196,39 @@ for c in spec.cases {
           "paper comes out white: RGB \(paper.map { Int($0) }) (photo had \(rawCorner.map { Int($0) }))")
     if rawSpread > 30 { check(spread < rawSpread / 3, "lamp tint removed (channel spread \(Int(rawSpread)) → \(Int(spread)))") }
 
-    // Cutout for the portal: the figure lifted off the paper, aligned with the page.
+    // One figure, isolated: the character is kept whole (thin limbs too), and
+    // the sun doodle, the scribble and the written name are left out.
+    // Page fractions (u right, v down) map to screen fractions for a turned page.
+    let toScreen: (CGFloat, CGFloat) -> (CGFloat, CGFloat) = { u, v in portrait ? (u, v) : (1 - v, u) }
     let started2 = Date()
-    if let cut = PageScanner.cutout(rectified) {
-        save(cut, "\(name)-cutout.png")
-        print("THUMB \(name)-cutout \(thumbnail(cut))")
-        let px = pixels(CIImage(cgImage: cut), 64, 90)
-        let coverage = Double(stride(from: 3, to: px.count, by: 4).filter { px[$0] > 128 }.count) / Double(64 * 90)
-        check(cut.width == rectified.width && cut.height == rectified.height, "cutout keeps the page frame (\(cut.width)×\(cut.height))")
-        // Thin lines survive: the stick arm and leg are part of the lifted figure.
-        let cutImage = CIImage(cgImage: cut)
-        for (label, u, v) in [("stick arm", 0.214, 0.471), ("stick leg", 0.39, 0.81)] as [(String, CGFloat, CGFloat)] {
-            let (x, y) = portrait ? (u, v) : (1 - v, u)
+    if let iso = PageScanner.isolate(rectified) {
+        let ms = Int(Date().timeIntervalSince(started2) * 1000)
+        save(iso.cutout, "\(name)-cutout.png")
+        save(iso.figure, "\(name)-figure.png")
+        print("THUMB \(name)-cutout \(thumbnail(iso.cutout))")
+        print("THUMB \(name)-figure \(thumbnail(iso.figure))")
+        check(iso.cutout.width == rectified.width && iso.cutout.height == rectified.height,
+              "cutout keeps the page frame (\(iso.cutout.width)×\(iso.cutout.height), \(ms) ms)")
+        let cutImage = CIImage(cgImage: iso.cutout)
+        for (label, u, v) in [("stick arm", 0.214, 0.471), ("stick leg", 0.39, 0.81), ("body", 0.31, 0.57)] as [(String, CGFloat, CGFloat)] {
+            let (x, y) = toScreen(u, v)
             let a = alphaMax(cutImage, x: x - 0.015, y: y - 0.015, w: 0.03, h: 0.03)
-            check(a > 0.6, "cutout keeps the \(label) (alpha \(String(format: "%.2f", a)))")
+            check(a > 0.6, "keeps the \(label) (alpha \(String(format: "%.2f", a)))")
         }
-        let blank = alphaMax(cutImage, x: 0.85, y: 0.05, w: 0.08, h: 0.05)
-        check(blank < 0.2, "blank paper is see-through (alpha \(String(format: "%.2f", blank)))")
-        check(coverage > 0.08 && coverage < 0.6,
-              "cutout isolates the figure: \(Int(coverage * 100))% of the page (\(Int(Date().timeIntervalSince(started2) * 1000)) ms)")
+        for (label, u, v) in [("sun doodle", 0.886, 0.074), ("scribble", 0.87, 0.95), ("written name", 0.08, 0.935)] as [(String, CGFloat, CGFloat)] {
+            let (x, y) = toScreen(u, v)
+            let a = alphaMax(cutImage, x: x - 0.02, y: y - 0.02, w: 0.04, h: 0.04)
+            check(a < 0.2, "leaves out the \(label) (alpha \(String(format: "%.2f", a)))")
+            check(!iso.box.contains(CGPoint(x: x, y: y)), "figure crop excludes the \(label)")
+        }
+        // The crop covers the whole character: page box (0.15, 0.12)–(0.85, 0.89).
+        let corners = [toScreen(0.15, 0.12), toScreen(0.85, 0.89)]
+        let want = CGRect(x: min(corners[0].0, corners[1].0), y: min(corners[0].1, corners[1].1),
+                          width: abs(corners[0].0 - corners[1].0), height: abs(corners[0].1 - corners[1].1))
+        check(iso.box.contains(want), "figure crop covers the whole character (box \(String(format: "%.2f,%.2f %.2f×%.2f", iso.box.minX, iso.box.minY, iso.box.width, iso.box.height)))")
+        check(iso.figureJPEG.count > 10_000, "figure image for generation: \(iso.figure.width)×\(iso.figure.height), \(iso.figureJPEG.count / 1024) KB")
     } else {
-        check(false, "foreground cutout found the figure")
+        check(false, "isolated a figure")
     }
 }
 

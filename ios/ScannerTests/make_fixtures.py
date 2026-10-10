@@ -49,6 +49,14 @@ def drawing():
     d.rounded_rectangle([cx - 190, 600, cx + 190, 680], radius=30, fill=(60, 110, 220), outline=ink, width=10)
     # a name written in the corner
     d.text((70, 1380), "PIP", fill=ink)
+    # stray things that must NOT end up in the character: a sun doodle in the
+    # corner and a scribble near the bottom edge
+    d.ellipse([885, 65, 975, 155], outline=(240, 180, 40), width=8)
+    for k in range(8):
+        a = k * math.pi / 4
+        d.line([(930 + 60 * math.cos(a), 110 + 60 * math.sin(a)), (930 + 80 * math.cos(a), 110 + 80 * math.sin(a))],
+               fill=(240, 180, 40), width=6)
+    d.line([(840, 1420), (900, 1395), (960, 1430), (1000, 1405)], fill=(90, 90, 100), width=5)
     return img
 
 

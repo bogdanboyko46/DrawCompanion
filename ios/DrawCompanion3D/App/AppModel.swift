@@ -112,7 +112,7 @@ final class AppModel {
         phase = .making
 
         do {
-            let job = try await backend.create(jpeg: captured.jpeg, hint: hint)
+            let job = try await backend.create(jpeg: captured.figureJPEG ?? captured.jpeg, hint: hint)
             self.job = job
             try await follow(job)
         } catch {

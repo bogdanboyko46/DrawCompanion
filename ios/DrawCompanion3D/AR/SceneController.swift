@@ -138,10 +138,10 @@ final class SceneController: NSObject, ARSessionDelegate {
         }
         guard let result else { throw CaptureError.noFrame }
         let (jpeg, image) = result
-        let cutout = await withCheckedContinuation { (c: CheckedContinuation<CGImage?, Never>) in
-            detectQueue.async { c.resume(returning: PageScanner.cutout(image)) }
+        let isolated = await withCheckedContinuation { (c: CheckedContinuation<PageScanner.Isolated?, Never>) in
+            detectQueue.async { c.resume(returning: PageScanner.isolate(image)) }
         }
-        return CapturedPage(jpeg: jpeg, image: image, cutout: cutout, worldCorners: world,
+        return CapturedPage(jpeg: jpeg, image: image, cutout: isolated?.cutout, figureJPEG: isolated?.figureJPEG, worldCorners: world,
                             transform: transform, size: size, measured: measured)
     }
 
