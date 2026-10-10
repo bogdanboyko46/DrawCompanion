@@ -60,6 +60,28 @@ def drawing():
     return img
 
 
+def pencil_drawing():
+    """A faint pencil doodle like a real sketch: thin light-gray lines, no fill."""
+    img = Image.new("RGB", (PAGE_W, PAGE_H), (248, 246, 240))
+    d = ImageDraw.Draw(img)
+    pencil = (135, 135, 140)
+    w = 4
+    # a bunny: round face, two long ears, eyes, smile, a little body and feet
+    d.ellipse([300, 520, 640, 820], outline=pencil, width=w)
+    d.ellipse([340, 200, 430, 540], outline=pencil, width=w)
+    d.ellipse([500, 200, 590, 540], outline=pencil, width=w)
+    d.line([(420, 630), (420, 660)], fill=pencil, width=w)
+    d.line([(520, 630), (520, 660)], fill=pencil, width=w)
+    d.arc([420, 660, 520, 740], 20, 160, fill=pencil, width=w)
+    d.ellipse([360, 800, 580, 1020], outline=pencil, width=w)
+    d.ellipse([350, 1000, 440, 1060], outline=pencil, width=w)
+    d.ellipse([500, 1000, 590, 1060], outline=pencil, width=w)
+    for k in range(12):  # fur scribbles along one side
+        y = 560 + k * 20
+        d.line([(285, y), (305, y + 8)], fill=pencil, width=3)
+    return img
+
+
 def table(seed):
     rng = np.random.default_rng(seed)
     y = np.arange(H)[:, None]
@@ -98,7 +120,7 @@ def warp_onto(bg, page, corners):
     return out.reshape(H, W, 3)
 
 
-def photo(name, corners, tint, seed, page=True):
+def photo(name, corners, tint, seed, page=True, art=None, page_shadow=None):
     bg = table(seed)
     if page:
         # soft drop shadow under the paper
@@ -106,7 +128,15 @@ def photo(name, corners, tint, seed, page=True):
         ImageDraw.Draw(shadow).polygon([(x + 14, y + 18) for x, y in corners], fill=110)
         shadow = np.asarray(shadow.filter(ImageFilter.GaussianBlur(18)), dtype=np.float64)[..., None] / 255
         bg = bg * (1 - 0.6 * shadow)
-        img = warp_onto(bg, drawing(), corners)
+        sheet = art or drawing()
+        if page_shadow:
+            # a soft, large shadow across part of the page (a hand, a phone, a lamp)
+            m = Image.new("L", sheet.size, 0)
+            ImageDraw.Draw(m).ellipse(page_shadow, fill=255)
+            m = np.asarray(m.filter(ImageFilter.GaussianBlur(70)), dtype=np.float64)[..., None] / 255
+            arr = np.asarray(sheet, dtype=np.float64) * (1 - m * np.array([0.38, 0.33, 0.22]))
+            sheet = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+        img = warp_onto(bg, sheet, corners)
     else:
         img = bg
     # lamp: warm tint plus a falloff from one corner
@@ -115,7 +145,8 @@ def photo(name, corners, tint, seed, page=True):
     img = img * np.array(tint)[None, None, :] * falloff[..., None]
     img += np.random.default_rng(seed + 1).normal(0, 2.5, img.shape)
     Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).save(os.path.join(OUT, f"{name}.jpg"), quality=90)
-    return {"file": f"{name}.jpg", "page": page, "corners": corners if page else None, "tint": tint}
+    return {"file": f"{name}.jpg", "page": page, "corners": corners if page else None, "tint": tint,
+            "art": "pencil" if art else "cat"}
 
 
 def main():
@@ -128,12 +159,16 @@ def main():
         photo("angled-warm", [(690, 260), (1250, 250), (1520, 1300), (380, 1320)], (1.0, 0.88, 0.70), 2),
         # page turned ~90° on the desk: its top edge faces the right of the photo
         photo("turned", [(1600, 300), (1640, 1150), (450, 1190), (420, 330)], (0.97, 0.95, 0.9), 3),
+        # faint pencil sketch with a big soft shadow over the lower right of the page
+        photo("pencil-shadow", [(560, 180), (1360, 210), (1390, 1290), (520, 1260)], (1.0, 0.97, 0.92), 5,
+              art=pencil_drawing(), page_shadow=[500, 900, 1300, 1700]),
         # no paper at all
         photo("no-page", None, (1.0, 0.95, 0.85), 4, page=False),
     ]
     with open(os.path.join(OUT, "cases.json"), "w") as f:
         json.dump({"pageSize": [PAGE_W, PAGE_H], "cases": cases}, f, indent=2)
     drawing().save(os.path.join(OUT, "drawing-original.png"))
+    pencil_drawing().save(os.path.join(OUT, "pencil-original.png"))
     print("wrote", [c["file"] for c in cases])
 
 

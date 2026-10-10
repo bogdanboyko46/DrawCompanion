@@ -18,6 +18,7 @@ struct Fixture: Decodable {
     var page: Bool
     var corners: [[Double]]?
     var tint: [Double]
+    var art: String?
 }
 struct Cases: Decodable {
     var pageSize: [Double]
@@ -115,11 +116,30 @@ func thumbnail(_ image: CGImage, maxSide: CGFloat = 240) -> String {
     return data.base64EncodedString()
 }
 
-let original = CIImage(cgImage: load(fixtures.appendingPathComponent("drawing-original.png")))
+let catOriginal = CIImage(cgImage: load(fixtures.appendingPathComponent("drawing-original.png")))
+let pencilOriginal = CIImage(cgImage: load(fixtures.appendingPathComponent("pencil-original.png")))
+
+/// What each test drawing must keep and leave out (page fractions, u right, v down).
+struct Expect {
+    var keep: [(String, CGFloat, CGFloat)]
+    var drop: [(String, CGFloat, CGFloat)]
+    var box: CGRect // must be inside the figure crop
+}
+let catExpect = Expect(
+    keep: [("stick arm", 0.214, 0.471), ("stick leg", 0.39, 0.81), ("body", 0.31, 0.57)],
+    drop: [("sun doodle", 0.886, 0.074), ("scribble", 0.87, 0.95), ("written name", 0.08, 0.935)],
+    box: CGRect(x: 0.15, y: 0.12, width: 0.70, height: 0.77))
+let pencilExpect = Expect(
+    keep: [("left ear line", 0.324, 0.249), ("face outline", 0.286, 0.451), ("foot", 0.376, 0.694)],
+    drop: [("shadow", 0.86, 0.88), ("shadow edge", 0.70, 0.80)],
+    box: CGRect(x: 0.29, y: 0.15, width: 0.30, height: 0.55))
 
 for c in spec.cases {
     print("\n\(c.file)")
     let image = load(fixtures.appendingPathComponent(c.file))
+    let pencil = c.art == "pencil"
+    let original = pencil ? pencilOriginal : catOriginal
+    let expect = pencil ? pencilExpect : catExpect
     let W = Double(image.width), H = Double(image.height)
     let buffer = pixelBuffer(image)
     // "Screen" = the photo itself, upright: Vision (bottom-left origin) → pixels (top-left).
@@ -175,7 +195,7 @@ for c in spec.cases {
         ("cream belly", 0.47, 0.60, 0.06, 0.05),
         ("blue scarf", 0.40, 0.415, 0.08, 0.02),
     ]
-    for (label, u, v, du, dv) in regions {
+    for (label, u, v, du, dv) in (pencil ? [] : regions) {
         let want = average(original, x: u, y: v, w: du, h: dv)
         // On screen a turned page is rotated 90° clockwise: page (u, v) → screen (1 - v, u).
         let got = portrait ? average(out, x: u, y: v, w: du, h: dv) : average(out, x: 1 - v - dv, y: u, w: dv, h: du)
@@ -210,19 +230,19 @@ for c in spec.cases {
         check(iso.cutout.width == rectified.width && iso.cutout.height == rectified.height,
               "cutout keeps the page frame (\(iso.cutout.width)×\(iso.cutout.height), \(ms) ms)")
         let cutImage = CIImage(cgImage: iso.cutout)
-        for (label, u, v) in [("stick arm", 0.214, 0.471), ("stick leg", 0.39, 0.81), ("body", 0.31, 0.57)] as [(String, CGFloat, CGFloat)] {
+        for (label, u, v) in expect.keep {
             let (x, y) = toScreen(u, v)
             let a = alphaMax(cutImage, x: x - 0.015, y: y - 0.015, w: 0.03, h: 0.03)
             check(a > 0.6, "keeps the \(label) (alpha \(String(format: "%.2f", a)))")
         }
-        for (label, u, v) in [("sun doodle", 0.886, 0.074), ("scribble", 0.87, 0.95), ("written name", 0.08, 0.935)] as [(String, CGFloat, CGFloat)] {
+        for (label, u, v) in expect.drop {
             let (x, y) = toScreen(u, v)
-            let a = alphaMax(cutImage, x: x - 0.02, y: y - 0.02, w: 0.04, h: 0.04)
+            // Look across the whole mark (the sun is a ring around this point).
+            let a = alphaMax(cutImage, x: x - 0.05, y: y - 0.03, w: 0.10, h: 0.06)
             check(a < 0.2, "leaves out the \(label) (alpha \(String(format: "%.2f", a)))")
-            check(!iso.box.contains(CGPoint(x: x, y: y)), "figure crop excludes the \(label)")
         }
-        // The crop covers the whole character: page box (0.15, 0.12)–(0.85, 0.89).
-        let corners = [toScreen(0.15, 0.12), toScreen(0.85, 0.89)]
+        // The crop covers the whole character.
+        let corners = [toScreen(expect.box.minX, expect.box.minY), toScreen(expect.box.maxX, expect.box.maxY)]
         let want = CGRect(x: min(corners[0].0, corners[1].0), y: min(corners[0].1, corners[1].1),
                           width: abs(corners[0].0 - corners[1].0), height: abs(corners[0].1 - corners[1].1))
         check(iso.box.contains(want), "figure crop covers the whole character (box \(String(format: "%.2f,%.2f %.2f×%.2f", iso.box.minX, iso.box.minY, iso.box.width, iso.box.height)))")

@@ -165,18 +165,23 @@ enum PageScanner {
 
         // Work on a coarse grid to find connected shapes. Bitmap row 0 is the top.
         let gw = 160, gh = max(8, Int((CGFloat(gw) * e.height / e.width).rounded()))
-        let small = drawn.transformed(by: CGAffineTransform(scaleX: CGFloat(gw) / e.width, y: CGFloat(gh) / e.height))
+        // Spread each line over its grid cell first, so thin pencil survives the shrink.
+        let pool = CIFilter.morphologyMaximum()
+        pool.inputImage = drawn.clampedToExtent()
+        pool.radius = Float(e.width / CGFloat(gw) / 2 + 1)
+        let pooled = (pool.outputImage ?? drawn).cropped(to: e)
+        let small = pooled.transformed(by: CGAffineTransform(scaleX: CGFloat(gw) / e.width, y: CGFloat(gh) / e.height))
         var px = [UInt8](repeating: 0, count: gw * gh * 4)
         ciContext.render(small, toBitmap: &px, rowBytes: gw * 4, bounds: CGRect(x: 0, y: 0, width: gw, height: gh),
                          format: .RGBA8, colorSpace: nil)
         // Ignore a thin band at the page edge: that's where paper edges, table and shadow show up.
-        let border = max(2, gw * 3 / 100)
+        let border = max(3, gw * 45 / 1000)
         var ink = [Bool](repeating: false, count: gw * gh)
         for y in border..<(gh - border) {
-            for x in border..<(gw - border) where px[(y * gw + x) * 4] > 90 { ink[y * gw + x] = true }
+            for x in border..<(gw - border) where px[(y * gw + x) * 4] > 70 { ink[y * gw + x] = true }
         }
         // Bridge small gaps so a figure drawn with separate strokes stays one shape.
-        let reach = 3
+        let reach = 2
         var grown = [Bool](repeating: false, count: gw * gh)
         for y in 0..<gh {
             for x in 0..<gw where ink[y * gw + x] {
@@ -225,6 +230,37 @@ enum PageScanner {
                 minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
             }
         }
+        // Areas enclosed by the figure (a face inside its outline) belong to it:
+        // anything the outside can't reach without crossing the shape.
+        var outside = [Bool](repeating: false, count: gw * gh)
+        var queue = [Int]()
+        for x in 0..<gw { queue.append(x); queue.append((gh - 1) * gw + x) }
+        for y in 0..<gh { queue.append(y * gw); queue.append(y * gw + gw - 1) }
+        while let i = queue.popLast() {
+            guard !outside[i], region[i] == 0 else { continue }
+            outside[i] = true
+            let x = i % gw, y = i / gw
+            if x > 0 { queue.append(i - 1) }
+            if x < gw - 1 { queue.append(i + 1) }
+            if y > 0 { queue.append(i - gw) }
+            if y < gh - 1 { queue.append(i + gw) }
+        }
+        for i in 0..<(gw * gh) where region[i] == 0 && !outside[i] { region[i] = 255 }
+        // The solid body: the filled shape shrunk back by the bridging distance,
+        // so it hugs the strokes instead of spilling past them.
+        var interior = [UInt8](repeating: 0, count: gw * gh)
+        for y in 0..<gh {
+            for x in 0..<gw where region[y * gw + x] != 0 {
+                var solid = true
+                search: for dy in -reach...reach {
+                    for dx in -reach...reach {
+                        let nx = x + dx, ny = y + dy
+                        if nx < 0 || ny < 0 || nx >= gw || ny >= gh || region[ny * gw + nx] == 0 { solid = false; break search }
+                    }
+                }
+                if solid { interior[y * gw + x] = 255 }
+            }
+        }
         let inkArea = Double((maxX - minX + 1) * (maxY - minY + 1)) / Double(gw * gh)
         guard maxX >= minX, inkArea > 0.002 else { return nil }
 
@@ -233,8 +269,17 @@ enum PageScanner {
             .transformed(by: CGAffineTransform(scaleX: e.width / CGFloat(gw), y: e.height / CGFloat(gh)))
             .applyingGaussianBlur(sigma: e.width / CGFloat(gw))
             .cropped(to: e)
+        let interiorImage = CIImage(bitmapData: Data(interior), bytesPerRow: gw, size: CGSize(width: gw, height: gh),
+                                    format: .L8, colorSpace: nil)
+            .transformed(by: CGAffineTransform(scaleX: e.width / CGFloat(gw), y: e.height / CGFloat(gh)))
+            .applyingGaussianBlur(sigma: e.width / CGFloat(gw) * 0.7)
+            .cropped(to: e)
+        // Crisp strokes plus filled interiors, clipped to the chosen shape.
+        let strokesAndFill = CIFilter.maximumCompositing()
+        strokesAndFill.inputImage = drawn
+        strokesAndFill.backgroundImage = interiorImage
         let keep = CIFilter.multiplyCompositing()
-        keep.inputImage = drawn
+        keep.inputImage = strokesAndFill.outputImage ?? drawn
         keep.backgroundImage = regionImage
         let mask = keep.outputImage ?? drawn
 
@@ -271,21 +316,10 @@ enum PageScanner {
         return Isolated(cutout: cutout, figure: figure, figureJPEG: jpeg, box: box)
     }
 
-    /// Everything that's ink, plus Vision's subject mask so solid white parts
-    /// of a character don't count as paper. Subject lift alone drops thin lines.
+    /// What counts as drawn. Interiors (a white face inside its outline) are
+    /// filled in by `isolate`, so no subject detection is needed here.
     static func drawnMask(_ source: CIImage, _ image: CGImage) -> CIImage {
-        var mask = inkMask(source)
-        let request = VNGenerateForegroundInstanceMaskRequest()
-        let handler = VNImageRequestHandler(cgImage: image)
-        if (try? handler.perform([request])) != nil,
-           let obs = request.results?.first, !obs.allInstances.isEmpty,
-           let subject = try? obs.generateScaledMaskForImage(forInstances: obs.allInstances, from: handler) {
-            let union = CIFilter.maximumCompositing()
-            union.inputImage = CIImage(cvPixelBuffer: subject)
-            union.backgroundImage = mask
-            mask = union.outputImage ?? mask
-        }
-        return mask.cropped(to: source.extent)
+        inkMask(source)
     }
 
     /// Transparent-background version of an image (used for the concept render).
@@ -294,21 +328,65 @@ enum PageScanner {
     }
 
     /// 1 where something is drawn, 0 on blank paper, soft at the edges.
+    ///
+    /// Two kinds of marks count, and neither is fooled by shadows or uneven light:
+    /// - lines: thin features darker than their surroundings (a morphological
+    ///   "black top-hat", which is zero on smooth gradients like a soft shadow);
+    /// - color: saturated areas such as crayon fills (shadows are grayish).
     static func inkMask(_ image: CIImage) -> CIImage {
-        // How far the darkest channel falls below paper white catches both dark
-        // lines and light colors (a pale yellow still has a low blue channel).
+        let e = image.extent
         let darkest = CIFilter.minimumComponent()
         darkest.inputImage = image
-        let k: CGFloat = 6, paperTolerance: CGFloat = 0.15 // uneven light on blank paper stays clear
-        let ramp = CIFilter.colorMatrix()
-        ramp.inputImage = darkest.outputImage
-        ramp.rVector = CIVector(x: -k, y: 0, z: 0, w: 0)
-        ramp.gVector = CIVector(x: 0, y: -k, z: 0, w: 0)
-        ramp.bVector = CIVector(x: 0, y: 0, z: -k, w: 0)
-        ramp.biasVector = CIVector(x: k * (1 - paperTolerance), y: k * (1 - paperTolerance), z: k * (1 - paperTolerance), w: 0)
-        let clamp = CIFilter.colorClamp()
-        clamp.inputImage = ramp.outputImage
-        return (clamp.outputImage ?? image).cropped(to: image.extent)
+        let brightest = CIFilter.maximumComponent()
+        brightest.inputImage = image
+        guard let d = darkest.outputImage?.cropped(to: e), let b = brightest.outputImage?.cropped(to: e) else { return image }
+
+        // Lines: close the image (max then min) to erase thin dark strokes, then
+        // see how much darker each pixel is than that.
+        let radius = Float(max(4, min(e.width, e.height) * 0.015))
+        let grow = CIFilter.morphologyMaximum()
+        grow.inputImage = d.clampedToExtent()
+        grow.radius = radius
+        let shrink = CIFilter.morphologyMinimum()
+        shrink.inputImage = grow.outputImage
+        shrink.radius = radius
+        let lines = CIFilter.subtractBlendMode() // background - input
+        lines.inputImage = d
+        lines.backgroundImage = (shrink.outputImage ?? d).cropped(to: e)
+
+        // Color: how far the brightest channel is above the darkest.
+        let chroma = CIFilter.subtractBlendMode()
+        chroma.inputImage = d
+        chroma.backgroundImage = b
+
+        func ramp(_ input: CIImage?, gain k: CGFloat, floor: CGFloat) -> CIImage? {
+            let m = CIFilter.colorMatrix()
+            m.inputImage = input
+            m.rVector = CIVector(x: k, y: 0, z: 0, w: 0)
+            m.gVector = CIVector(x: 0, y: k, z: 0, w: 0)
+            m.bVector = CIVector(x: 0, y: 0, z: k, w: 0)
+            m.biasVector = CIVector(x: -k * floor, y: -k * floor, z: -k * floor, w: 0)
+            let c = CIFilter.colorClamp()
+            c.inputImage = m.outputImage
+            return c.outputImage
+        }
+        // Values are in linear light: a faint pencil line is ~0.1 darker than the paper
+        // around it; paper grain and JPEG noise stay under 0.04. Crayon colors are
+        // well above 0.3 chroma; a bluish shadow on white paper stays under ~0.2.
+        // Very dark areas (a black-filled shape, wider than any line) count too;
+        // a shadow on white paper never gets that dark.
+        let inverted = CIFilter.colorInvert()
+        inverted.inputImage = d
+        guard let lineMask = ramp(lines.outputImage, gain: 10, floor: 0.04),
+              let colorMask = ramp(chroma.outputImage, gain: 6, floor: 0.22),
+              let darkMask = ramp(inverted.outputImage, gain: 8, floor: 0.82) else { return image }
+        let union = CIFilter.maximumCompositing()
+        union.inputImage = lineMask
+        union.backgroundImage = colorMask
+        let all = CIFilter.maximumCompositing()
+        all.inputImage = union.outputImage
+        all.backgroundImage = darkMask
+        return (all.outputImage ?? lineMask).cropped(to: e)
     }
 
     /// Paper frame from its world corners (TL, TR, BR, BL).
