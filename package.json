@@ -1,0 +1,19 @@
+{
+  "name": "drawcompanion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-time AR drawing assistant: ask for a suggestion, get a traceable outline anchored to your paper.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "mock": "DRAWCOMPANION_MOCK=1 node server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "zod": "^4.6.5"
+  }
+}

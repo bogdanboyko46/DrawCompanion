@@ -1,0 +1,103 @@
+:root {
+  --bg: #111317;
+  --panel: #1b1e24;
+  --text: #eef0f3;
+  --muted: #9aa3ad;
+  --accent: #19c3ff;
+  --border: #2c313a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+#stage {
+  position: relative;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  background: #000;
+  touch-action: none;
+}
+
+#view {
+  max-width: 100%;
+  max-height: 70dvh;
+  display: block;
+}
+
+#hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.65);
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+#panel {
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+select, button {
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #262a32;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); color: #001018; border-color: transparent; font-weight: 600; }
+button.active { outline: 2px solid var(--accent); }
+
+#modes { display: flex; gap: 12px; flex: 1; flex-wrap: wrap; color: var(--muted); }
+#modes label { display: flex; gap: 4px; align-items: center; }
+
+#result p { margin: 0; color: var(--muted); }
+#steps { margin: 0; padding-left: 20px; }
+
+#palette { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+.swatch i { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgb(255 255 255 / 0.3); }

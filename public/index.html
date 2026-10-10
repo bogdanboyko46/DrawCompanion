@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DrawCompanion</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div id="hint" role="status">Starting camera…</div>
+    </div>
+
+    <section id="panel">
+      <div class="row">
+        <select id="paper" aria-label="Paper size">
+          <option value="1.4142">A-series (A4, A5…)</option>
+          <option value="1.2941">US Letter</option>
+          <option value="1">Square</option>
+          <option value="0.7071">A-series, landscape</option>
+          <option value="0.7727">Letter, landscape</option>
+        </select>
+        <button id="calibrate">Set corners</button>
+        <button id="region" disabled>Mark area</button>
+      </div>
+
+      <div class="row">
+        <input id="request" type="text" placeholder="What are you stuck on? e.g. “add a cat on the windowsill”" disabled>
+        <button id="mic" title="Hold to talk" disabled aria-label="Hold to talk">🎤</button>
+      </div>
+
+      <div class="row">
+        <div id="modes" role="radiogroup" aria-label="Suggestion type">
+          <label><input type="radio" name="mode" value="outline" checked> Outline</label>
+          <label><input type="radio" name="mode" value="scaffold"> Guides only</label>
+          <label><input type="radio" name="mode" value="options"> 3 ideas</label>
+        </div>
+        <button id="ask" class="primary" disabled>Suggest</button>
+      </div>
+
+      <div id="result" hidden>
+        <p id="understood"></p>
+        <div id="palette"></div>
+        <ol id="steps"></ol>
+        <div class="row">
+          <button id="prev" hidden>‹ Idea</button>
+          <button id="next" hidden>Idea ›</button>
+          <button id="dismiss">Hide outline</button>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
