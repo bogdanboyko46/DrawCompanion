@@ -76,6 +76,18 @@ test("a hand resting on the outline isn't ink but holds the outline up", () => {
   assert.equal(t.update(traced, 8100).done, true);
 });
 
+test("densely packed ink (small petals, hatching) still counts as tracing and lets the outline clear", () => {
+  // Eight close parallel outline strokes, 3 grid pixels apart, all traced.
+  const strokes = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => ({ role: "contour", closed: false, weight: "medium", points: [[300, 480 + k * 15], [700, 480 + k * 15]] }));
+  const t = tracker(blank(), strokes);
+  const img = blank();
+  for (let k = 0; k < 8; k++) ink(img, 60, 140, 96 + k * 3);
+  let s = feed(t, img, [0, 300, 600, 900]);
+  assert.equal(s.started, true);
+  assert.ok(s.strokes.every((st) => st.progress > 0.9), s.strokes.map((st) => st.progress).join(","));
+  assert.equal(t.update(img, 4000).done, true);
+});
+
 test("whole-page change is reported as occluded and holds the outline", () => {
   const t = tracker();
   const traced = ink(blank(), 40, 160, 100);

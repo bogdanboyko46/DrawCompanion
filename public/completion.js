@@ -8,9 +8,10 @@
 // New ink shows up as pixels that got darker. Each stroke is sampled into
 // points; a point counts as traced once new ink appears near it in several
 // consecutive frames. Things that look like ink but aren't:
-//   - a hand or pencil over the page: a large *blob* of change, not a thin
-//     line. It isn't counted as ink, but it does keep the outline up, since
-//     a hand on the outline means the user is probably still drawing.
+//   - a hand or pencil over the page: a *solid* region of change, where ink
+//     is thin lines (even when many lines are packed close together). It
+//     isn't counted as ink, but it does keep the outline up, since a hand on
+//     the outline means the user is probably still drawing.
 //   - lighting shifts: overall brightness is matched to the baseline
 //   - small tracking misalignment (the camera is on your head): a pixel only
 //     counts if it's darker than everything near it in the baseline, so
@@ -21,10 +22,9 @@ const DEFAULTS = {
   darkerBy: 28, // gray levels a pixel must darken to count as ink
   alignPx: 2, // tolerated misalignment between baseline and current, in grid pixels
   hitRadius: 0.018, // tolerance around the outline, as a fraction of page width
-  blobRadius: 0.05, // window for the "is this a thin line?" test
-  // A traced line fills roughly thickness/(2*blobRadius) of the window; a
-  // crossing doubles that. The edge of a hand fills far more.
-  blobFraction: 0.3,
+  // Change that fills a whole (2*solidPx+1)^2 square is solid (a hand), not a
+  // line: pen lines are only 1-2 grid pixels wide, even where they cross.
+  solidPx: 2,
   frameOccludedFraction: 0.15, // more of the page changed than this = hand over the page
   confirmFrames: 3, // consecutive frames a point must look inked
   strokeDoneAt: 0.8, // fraction of a stroke traced to show it as done
@@ -77,8 +77,10 @@ export class CompletionTracker {
     }
 
     const sat = integral(changed, w, h);
+    const solid = integral(erode(sat, w, h, opts.solidPx), w, h);
     const r = Math.max(1, Math.round(opts.hitRadius * w));
-    const R = Math.max(r + 1, Math.round(opts.blobRadius * w));
+    // A solid core within this distance means part of a hand is within r.
+    const reach = r + opts.solidPx;
     let active = false;
     for (const s of this.strokes) {
       let tracedCount = 0;
@@ -88,9 +90,7 @@ export class CompletionTracker {
           if (near === 0) {
             s.streak[i] = 0;
           } else {
-            const wide = boxSum(sat, w, h, x - R, y - R, x + R, y + R);
-            const area = boxArea(w, h, x - R, y - R, x + R, y + R);
-            if (wide / area > opts.blobFraction) {
+            if (boxSum(solid, w, h, x - reach, y - reach, x + reach, y + reach) > 0) {
               active = true; // hand on the outline
             } else if (++s.streak[i] >= opts.confirmFrames) {
               s.traced[i] = 1;
@@ -188,6 +188,12 @@ function boxSum(sat, w, h, x0, y0, x1, y1) {
   return sat[(y1 + 1) * W + x1 + 1] - sat[y0 * W + x1 + 1] - sat[(y1 + 1) * W + x0] + sat[y0 * W + x0];
 }
 
-function boxArea(w, h, x0, y0, x1, y1) {
-  return (Math.min(w - 1, x1) - Math.max(0, x0) + 1) * (Math.min(h - 1, y1) - Math.max(0, y0) + 1);
+// Pixels whose whole (2r+1)^2 neighborhood changed (morphological erosion),
+// computed from the change mask's summed-area table.
+function erode(sat, w, h, r) {
+  const out = new Uint8Array(w * h);
+  const full = (2 * r + 1) ** 2;
+  for (let y = r; y < h - r; y++)
+    for (let x = r; x < w - r; x++) out[y * w + x] = boxSum(sat, w, h, x - r, y - r, x + r, y + r) === full ? 1 : 0;
+  return out;
 }

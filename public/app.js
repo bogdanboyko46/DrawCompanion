@@ -496,5 +496,8 @@ document.addEventListener("fullscreenchange", () => {
   resize();
 });
 
+// ?debug exposes internals for inspection from the console or test scripts.
+if (new URLSearchParams(location.search).has("debug")) window.drawcompanion = { state, turn };
+
 status("Point the camera at your printed DrawCompanion page, then start listening.");
 startCamera();
