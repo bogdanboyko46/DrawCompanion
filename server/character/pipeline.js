@@ -29,6 +29,9 @@ const IMAGE_MODEL = process.env.DRAWCOMPANION_IMAGE_MODEL || "nano-banana-pro";
 const MESH_MODEL = process.env.DRAWCOMPANION_MESH_MODEL || "latest";
 const POLYCOUNT = Number(process.env.DRAWCOMPANION_POLYCOUNT || 50000);
 const MULTIVIEW = process.env.DRAWCOMPANION_MULTIVIEW !== "0";
+// DRAWCOMPANION_ANIMATE=0 ships every character as a static model: no rig,
+// no clips, no Blender, and a natural pose instead of a T-pose.
+const ANIMATE = process.env.DRAWCOMPANION_ANIMATE !== "0";
 const LOOPING = new Set(["idle", "walk", "run", "dance", "sleep", "think"]);
 
 export class PipelineError extends Error {}
@@ -37,9 +40,10 @@ export class PipelineError extends Error {}
  * Runs (or resumes) a job. deps: { director, meshy, packer, store }.
  * The job object is mutated in place and saved after every change.
  */
-export async function runCharacterJob(job, { director, meshy, packer, store }) {
+export async function runCharacterJob(job, { director, meshy, packer, store }, { animate = ANIMATE } = {}) {
   const save = () => store.save(job);
   job.tasks ??= {};
+  job.animate ??= animate; // fixed per job, so a resumed job doesn't change course
   job.status = "running";
   job.error = null;
 
@@ -83,17 +87,21 @@ export async function runCharacterJob(job, { director, meshy, packer, store }) {
 
     await stage("read", async () => {
       let library = [];
-      try {
-        library = await meshy.library();
-      } catch (err) {
-        console.warn("animation library unavailable:", err.message);
+      if (job.animate) {
+        try {
+          library = await meshy.library();
+        } catch (err) {
+          console.warn("animation library unavailable:", err.message);
+        }
       }
       job.sheet = await director.readDrawing({
         imageBase64: drawingB64,
         mediaType: "image/jpeg",
         hint: job.hint,
         library,
+        animate: job.animate,
       });
+      if (!job.animate) job.sheet = { ...job.sheet, riggable: false, animations: [] };
       if (!job.sheet.is_character) {
         throw new PipelineError(job.sheet.reject_reason || "That doesn't look like a character yet. Try drawing a figure.");
       }

@@ -230,7 +230,7 @@ server.listen(PORT, async () => {
   console.log(`DrawCompanion on http://localhost:${PORT}${MOCK ? " (mock mode)" : ""}`);
   if (!MOCK) {
     if (!process.env.MESHY_API_KEY) console.warn("MESHY_API_KEY not set: /api/characters is disabled");
-    else if (!(await realPacker.available())) {
+    else if (process.env.DRAWCOMPANION_ANIMATE !== "0" && !(await realPacker.available())) {
       console.warn("Blender's bpy is not importable by DRAWCOMPANION_PYTHON: animated characters will fail to package. See README.");
     }
   }

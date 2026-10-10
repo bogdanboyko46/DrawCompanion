@@ -80,15 +80,18 @@ Minor stylization is expected and fine. Flag only differences the user would not
 
 let client;
 
-export async function readDrawing({ imageBase64, mediaType, hint, library }) {
+export async function readDrawing({ imageBase64, mediaType, hint, library, animate = true }) {
   client ??= new Anthropic();
   const libraryText = library?.length
     ? library.map((a) => `${a.id}: ${a.name}${a.category ? ` [${a.category}]` : ""}`).join("\n")
     : "(library unavailable)";
   const text = [
     hint ? `The user says: "${hint}"` : "The user gave no description; read the drawing.",
-    "Animation library:",
-    libraryText,
+    ...(animate
+      ? ["Animation library:", libraryText]
+      : [
+          "Animation is OFF: this character will be a static model. Set riggable to false, return no animations, and write the concept_prompt for a natural, appealing standing pose that shows its personality (not a T-pose).",
+        ]),
   ].join("\n");
   const sheet = await parse(SHEET_SYSTEM, [image(mediaType, imageBase64), { type: "text", text }], Sheet);
   return sanitizeSheet(sheet, library);

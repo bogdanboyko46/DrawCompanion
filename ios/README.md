@@ -51,7 +51,7 @@ Characters the auto-rigger can't take (four-legged animals, blobs, objects) stil
 | `MESHY_API_KEY` | Concept painting, 3D generation, rigging, animation | Get a key at meshy.ai, then `export MESHY_API_KEY=…` |
 | Blender's Python module | Packs the rig and all its clips into one USDZ for RealityKit | `python3.13 -m venv ~/.dc-blender && ~/.dc-blender/bin/pip install bpy` then `export DRAWCOMPANION_PYTHON=~/.dc-blender/bin/python` |
 
-The server warns at startup if the packer isn't available.
+The server warns at startup if the packer isn't available. With `DRAWCOMPANION_ANIMATE=0` you don't need Blender at all.
 
 A character costs roughly **50–60 Meshy credits**: about 9 for the concept (plus 9 if it has to be repainted), about 30 for the textured 3D model, a few for rigging, and 3 for each extra animation clip. Walk and run come free with the rig. Check Meshy's current pricing.
 
@@ -59,6 +59,7 @@ Optional environment variables:
 
 | Variable | Default | Effect |
 |---|---|---|
+| `DRAWCOMPANION_ANIMATE` | `1` | `0` ships every character as a static model with a natural pose: no rigging or animations, no Blender needed, about 1–2 minutes and 10–15 credits less per character |
 | `DRAWCOMPANION_IMAGE_MODEL` | `nano-banana-pro` | Concept painter (`nano-banana`, `nano-banana-2`, `gpt-image-2`, …) |
 | `DRAWCOMPANION_MESH_MODEL` | `latest` | Meshy 3D model |
 | `DRAWCOMPANION_POLYCOUNT` | `50000` | Triangle budget. 30–60k looks great on phones |

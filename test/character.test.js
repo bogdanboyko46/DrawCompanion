@@ -59,6 +59,21 @@ test("non-humanoid skips the rig and ships the static model", async () => {
   assert.equal(meshy.tasks.get(job.tasks.sculpt).body.pose_mode, undefined);
 });
 
+test("with animation off, nothing is rigged and the pose is natural", async () => {
+  const meshy = new CountingMeshy();
+  const { job, deps } = await setup({ meshy });
+  await runCharacterJob(job, deps, { animate: false });
+  assert.equal(job.status, "ready", job.error);
+  assert.equal(job.animated, false);
+  assert.deepEqual(job.done, ["read", "concept", "review", "sculpt", "package"]);
+  assert.ok(!meshy.created.includes(ENDPOINTS.rigging));
+  assert.ok(!meshy.created.includes(ENDPOINTS.animation));
+  assert.equal(meshy.tasks.get(job.tasks.sculpt).body.pose_mode, undefined, "no T-pose");
+  // a resumed job keeps its original setting
+  await runCharacterJob(job, deps, { animate: true });
+  assert.equal(job.animate, false);
+});
+
 test("a failed rig falls back to a static model instead of failing the job", async () => {
   class NoRig extends MockMeshy {
     async wait(endpoint, id, opts) {
