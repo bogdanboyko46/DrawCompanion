@@ -1,44 +1,60 @@
-// DrawCompanion web client ("magic window" prototype).
+// DrawCompanion web client.
 //
-// Point a phone/tablet camera at your page (a stand works best), tap the four
-// corners once, then ask for help. The suggestion is drawn on the live video,
-// locked to the paper, and fades stroke by stroke as you trace it.
+// Two views of the same pipeline:
+//   - Headset: the phone sits in a lightweight viewer. Its camera shows your
+//     page to both eyes, with the outline on top. You aim a reticle by moving
+//     your head and tap the viewer's button: tap two corners to box where the
+//     suggestion goes, then say what you want. Tap again to ask for changes.
+//   - Phone: the same thing on a handheld or propped-up phone; drag a box,
+//     type or talk.
+// The page is found every frame from the printed template's markers, so the
+// outline stays on the paper while your head (or the paper) moves.
 
-import { applyHomography, invert3x3, paperToImage, rectifyRGBA, toGray } from "./geometry.js";
+import { applyHomography, invert3x3, multiply, rectifyRGBA, toGray } from "./geometry.js";
 import { CompletionTracker } from "./completion.js";
+import { boardLayout } from "./board.js";
+import { PaperTracker, pageMotion } from "./tracking.js";
 
-const PAPER_W = 1000; // paper units across; height follows the chosen aspect
-const UPLOAD_W = 768; // pixels across for the image sent to the model
-const TRACK_W = 200; // pixels across for completion tracking
-const TRACK_MS = 400;
-const OCCLUDED_HINT_MS = 8000;
+const DETECT_W = 960; // marker detection runs on a downscaled frame
+const TRACK_W = 200; // completion tracking grid
+const TRACK_MS = 300;
+const UPLOAD_W = 768; // image sent to the model
+const LOST_MS = 300; // keep the last pose this long when markers drop out
+const ZOOM = 1.6; // headset: crop of the camera image shown to each eye
 
 const $ = (id) => document.getElementById(id);
 const view = $("view");
 const ctx = view.getContext("2d");
-const grab = document.createElement("canvas");
-const grabCtx = grab.getContext("2d", { willReadFrequently: true });
+const det = document.createElement("canvas");
+const detCtx = det.getContext("2d", { willReadFrequently: true });
 const video = Object.assign(document.createElement("video"), { playsInline: true, muted: true });
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const state = {
-  mode: "camera", // camera | calibrating | ready | region | waiting | showing
-  corners: [],
-  H: null, // paper -> video pixels
-  Hinv: null,
-  paperH: 0,
-  region: null, // paper units
-  dragStart: null,
-  dragNow: null,
+  headset: false,
+  step: "idle", // idle | boxing | boxed | listening | waiting | showing
+  layout: boardLayout($("paper").value),
+  paperTracker: null,
+  H: null, // paper -> video pixels, null when the page isn't visible
+  lastSeen: 0,
+  visible: false,
+  detImage: null,
+  box: null, // paper units
+  boxStart: null, // paper point where the box began
+  dragNow: null, // phone: paper point under the finger
+  request: "",
+  mode: "outline",
+  feedback: [],
   result: null,
   index: 0,
   tracker: null,
   trackState: null,
-  baseline: null,
-  occludedSince: 0,
+  trackH: null,
   fadeStart: 0,
+  hintText: "",
 };
 
-// ---------- camera & render loop ----------
+// ---------- camera, tracking, render loop ----------
 
 async function startCamera() {
   try {
@@ -51,63 +67,108 @@ async function startCamera() {
     hint(`Camera unavailable: ${err.message}. Use https or localhost and allow camera access.`);
     return;
   }
-  view.width = grab.width = video.videoWidth;
-  view.height = grab.height = video.videoHeight;
-  setMode("calibrating");
-  hint(cornerHint());
-  requestAnimationFrame(render);
+  det.width = DETECT_W;
+  det.height = Math.round((DETECT_W * video.videoHeight) / video.videoWidth);
+  state.paperTracker = new PaperTracker(new AR.Detector(), state.layout);
+  hint("Point the camera at your printed DrawCompanion page.");
+  resize();
+  requestAnimationFrame(frame);
+}
+
+function frame(now) {
+  detCtx.drawImage(video, 0, 0, det.width, det.height);
+  state.detImage = detCtx.getImageData(0, 0, det.width, det.height);
+  const { H } = state.paperTracker.update(state.detImage, video.videoWidth / det.width);
+  if (H) {
+    state.H = H;
+    state.lastSeen = now;
+  } else if (now - state.lastSeen > LOST_MS) {
+    state.H = null;
+  }
+  // Say so when the page comes into or drops out of view.
+  if (!!state.H !== state.visible) {
+    state.visible = !!state.H;
+    if (!state.H) hint("Can't see the page. Look at it so the corner squares are in view.");
+    else if (state.step === "idle" && !state.result) hint(idleHint());
+    else if (state.step === "showing") hint(state.headset ? "Tap to ask for changes." : "Not quite? Say or type what to change.");
+  }
+  render(now);
+  requestAnimationFrame(frame);
+}
+
+const idleHint = () =>
+  state.headset
+    ? "Aim the dot at one corner of where you want help, then tap."
+    : "Drag a box where you want help, then say or type what you want.";
+
+// ---------- views ----------
+
+function resize() {
+  if (state.headset) {
+    view.width = Math.round(innerWidth * devicePixelRatio);
+    view.height = Math.round(innerHeight * devicePixelRatio);
+  } else {
+    view.width = video.videoWidth;
+    view.height = video.videoHeight;
+  }
+}
+addEventListener("resize", () => video.videoWidth && resize());
+
+// Each viewport shows a crop of the camera image. Returns {x, y, w, h}
+// (canvas rect) and the transform from video pixels into it.
+function viewports() {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!state.headset) return [{ x: 0, y: 0, w: view.width, h: view.height, scale: view.width / vw, cx: 0, cy: 0 }];
+  const eyeW = view.width / 2;
+  const eyeH = view.height;
+  let cropH = vh / ZOOM;
+  let cropW = (cropH * eyeW) / eyeH;
+  if (cropW > vw) [cropW, cropH] = [vw, (vw * eyeH) / eyeW];
+  const cx = (vw - cropW) / 2;
+  const cy = (vh - cropH) / 2;
+  return [0, 1].map((i) => ({ x: i * eyeW, y: 0, w: eyeW, h: eyeH, scale: eyeW / cropW, cx, cy }));
 }
 
 function render(now) {
-  ctx.drawImage(video, 0, 0, view.width, view.height);
-  if (state.mode === "calibrating") drawCorners();
-  if (state.H && state.mode !== "calibrating") drawPageEdge();
-  if (state.mode === "region" && state.dragStart && state.dragNow) drawDragRect();
-  if (state.region && (state.mode === "region" || state.mode === "ready" || state.mode === "waiting")) {
-    drawPaperRect(state.region, state.mode === "waiting" ? pulse(now) : 0.9, [8, 6]);
-  }
-  if (state.mode === "waiting" && !state.region) drawPaperRect(fullPage(), pulse(now), [8, 6]);
-  if (state.mode === "showing") drawSuggestion(now);
-  requestAnimationFrame(render);
-}
-
-// ---------- drawing ----------
-
-const unit = () => view.width / 640;
-
-function drawCorners() {
-  ctx.fillStyle = "#19c3ff";
-  state.corners.forEach(([x, y], i) => {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, view.width, view.height);
+  for (const vp of viewports()) {
+    ctx.save();
     ctx.beginPath();
-    ctx.arc(x, y, 8 * unit(), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.font = `${14 * unit()}px system-ui`;
-    ctx.fillText(String(i + 1), x + 10 * unit(), y - 10 * unit());
-  });
+    ctx.rect(vp.x, vp.y, vp.w, vp.h);
+    ctx.clip();
+    ctx.setTransform(vp.scale, 0, 0, vp.scale, vp.x - vp.cx * vp.scale, vp.y - vp.cy * vp.scale);
+    ctx.drawImage(video, 0, 0);
+    drawScene(now);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (state.headset) drawHud(vp);
+    ctx.restore();
+  }
 }
 
-function drawPageEdge() {
-  strokePaperPath([[0, 0], [PAPER_W, 0], [PAPER_W, state.paperH], [0, state.paperH]], true, {
+function drawScene(now) {
+  if (!state.H) return;
+  const { paperW, paperH } = state.layout;
+  strokePaperPath([[0, 0], [paperW, 0], [paperW, paperH], [0, paperH]], true, {
     color: "rgb(25 195 255 / 0.35)",
     width: 1.5,
   });
+  const pending = state.step === "boxing" ? reticleOrDrag() : null;
+  if (pending) drawBox(rectFrom(state.boxStart, pending), 0.9);
+  if (state.box && ["boxed", "listening", "idle"].includes(state.step) && !state.result) drawBox(state.box, 0.9);
+  if (state.step === "waiting") drawBox(state.box ?? fullPage(), pulse(now));
+  if (state.result && state.step !== "waiting") drawSuggestion(now);
 }
 
-function drawDragRect() {
-  const [x0, y0] = state.dragStart;
-  const [x1, y1] = state.dragNow;
-  ctx.setLineDash([6 * unit(), 4 * unit()]);
-  ctx.strokeStyle = "#19c3ff";
-  ctx.lineWidth = 2 * unit();
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-  ctx.setLineDash([]);
-}
+const unit = () => video.videoWidth / 640;
 
-function drawPaperRect({ x, y, w, h }, alpha, dash) {
+function drawBox({ x, y, w, h }, alpha) {
   strokePaperPath([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], true, {
     color: `rgb(25 195 255 / ${alpha})`,
     width: 2,
-    dash,
+    dash: [8, 6],
   });
 }
 
@@ -121,17 +182,16 @@ const WEIGHT = { light: 0.75, medium: 1, bold: 1.4 };
 
 function drawSuggestion(now) {
   const s = current();
-  if (!s) return;
   let fade = 1;
   if (state.fadeStart) {
     fade = Math.max(0, 1 - (now - state.fadeStart) / 900);
-    if (fade === 0) return finish("Nice — outline cleared. Ask again whenever you're stuck.");
+    if (fade === 0) return finish("Outline cleared. Box a new spot whenever you're stuck.");
   }
   s.strokes.forEach((st, i) => {
     const style = ROLE_STYLE[st.role] ?? ROLE_STYLE.contour;
     const prog = state.trackState?.strokes[i];
     // Traced strokes step back so the untraced ones stand out.
-    const progressFade = prog?.done ? 0.15 : 1 - 0.5 * (prog?.progress ?? 0);
+    const progressFade = prog?.done ? 0.3 : 1 - 0.5 * (prog?.progress ?? 0);
     const alpha = style.alpha * progressFade * fade;
     const width = style.width * (WEIGHT[st.weight] ?? 1);
     // Dark halo first so the line reads on both light paper and dark ink.
@@ -156,112 +216,268 @@ function strokePaperPath(points, closed, { color, width, dash = [] }) {
   ctx.setLineDash([]);
 }
 
-const pulse = (now) => 0.35 + 0.35 * Math.sin(now / 250);
-const fullPage = () => ({ x: 0, y: 0, w: PAPER_W, h: state.paperH });
+// Headset overlay in eye coordinates: aiming dot and status text.
+function drawHud(vp) {
+  const s = vp.h / 400;
+  const cx = vp.x + vp.w / 2;
+  const cy = vp.y + vp.h / 2;
+  ctx.fillStyle = state.H ? "#19c3ff" : "#ff8a3d";
+  ctx.strokeStyle = "rgb(0 0 0 / 0.7)";
+  ctx.lineWidth = 2 * s;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
 
-// ---------- input on the video ----------
-
-function toCanvas(ev) {
-  const r = view.getBoundingClientRect();
-  return [((ev.clientX - r.left) / r.width) * view.width, ((ev.clientY - r.top) / r.height) * view.height];
+  ctx.font = `${11 * s}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  const lines = wrap(state.hintText, vp.w * 0.7);
+  const lh = 14 * s;
+  const top = vp.y + vp.h * 0.88 - (lines.length - 1) * lh;
+  ctx.fillStyle = "rgb(0 0 0 / 0.6)";
+  ctx.fillRect(cx - vp.w * 0.37, top - lh, vp.w * 0.74, lines.length * lh + 6 * s);
+  ctx.fillStyle = "#fff";
+  lines.forEach((l, i) => ctx.fillText(l, cx, top + i * lh));
+  ctx.textAlign = "start";
 }
+
+function wrap(text, maxW) {
+  const lines = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    const next = line ? `${line} ${word}` : word;
+    if (ctx.measureText(next).width > maxW && line) {
+      lines.push(line);
+      line = word;
+    } else line = next;
+  }
+  return line ? [...lines, line] : lines;
+}
+
+const pulse = (now) => 0.35 + 0.35 * Math.sin(now / 250);
+const fullPage = () => ({ x: 0, y: 0, w: state.layout.paperW, h: state.layout.paperH });
+
+// ---------- pointing ----------
+
+// Paper point at the center of the camera image (where the headset reticle is).
+function reticlePaper() {
+  if (!state.H) return null;
+  return clampPaper(applyHomography(invert3x3(state.H), [video.videoWidth / 2, video.videoHeight / 2]));
+}
+
+const reticleOrDrag = () => (state.headset ? reticlePaper() : state.dragNow);
+
+function canvasToPaper(ev) {
+  if (!state.H) return null;
+  const r = view.getBoundingClientRect();
+  const v = [((ev.clientX - r.left) / r.width) * video.videoWidth, ((ev.clientY - r.top) / r.height) * video.videoHeight];
+  return clampPaper(applyHomography(invert3x3(state.H), v));
+}
+
+const clampPaper = ([x, y]) => [clamp(x, 0, state.layout.paperW), clamp(y, 0, state.layout.paperH)];
+
+function rectFrom([x0, y0], [x1, y1]) {
+  return { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
+}
+
+const MIN_BOX = 30; // paper units (about 6 mm)
+
+function setBox(a, b) {
+  const box = rectFrom(a, b);
+  state.boxStart = state.dragNow = null;
+  if (box.w < MIN_BOX || box.h < MIN_BOX) {
+    state.box = null;
+    state.step = "idle";
+    hint("Box too small, cancelled.");
+    return false;
+  }
+  state.box = box;
+  state.step = "boxed";
+  return true;
+}
+
+// ---------- headset: everything is look + tap (the viewer's button) ----------
+
+function headsetTap() {
+  switch (state.step) {
+    case "idle": {
+      const p = reticlePaper();
+      if (!p) return hint("Can't see the page. Look at it so the corner squares are in view.");
+      state.boxStart = p;
+      state.step = "boxing";
+      return hint("Now aim at the opposite corner and tap.");
+    }
+    case "boxing": {
+      const p = reticlePaper();
+      if (!p) return hint("Lost the page. Look back at it and tap again.");
+      if (setBox(state.boxStart, p)) listen("request");
+      return;
+    }
+    case "boxed":
+      return listen("request");
+    case "listening":
+      return stopListening();
+    case "showing":
+      return listen("feedback");
+  }
+}
+
+// ---------- phone: drag a box ----------
 
 view.addEventListener("pointerdown", (ev) => {
-  const p = toCanvas(ev);
-  if (state.mode === "calibrating") {
-    state.corners.push(p);
-    if (state.corners.length === 4) setCorners();
-    else hint(cornerHint());
-  } else if (state.mode === "region") {
-    state.dragStart = state.dragNow = p;
-    view.setPointerCapture(ev.pointerId);
-  }
+  if (state.headset) return headsetTap();
+  if (!["idle", "boxed"].includes(state.step) || state.result) return;
+  const p = canvasToPaper(ev);
+  if (!p) return hint("Point the camera at your printed DrawCompanion page first.");
+  state.boxStart = state.dragNow = p;
+  state.step = "boxing";
+  view.setPointerCapture(ev.pointerId);
 });
 view.addEventListener("pointermove", (ev) => {
-  if (state.mode === "region" && state.dragStart) state.dragNow = toCanvas(ev);
+  if (!state.headset && state.step === "boxing") state.dragNow = canvasToPaper(ev) ?? state.dragNow;
 });
 view.addEventListener("pointerup", () => {
-  if (state.mode !== "region" || !state.dragStart) return;
-  const [x0, y0] = state.dragStart;
-  const [x1, y1] = state.dragNow;
-  state.dragStart = state.dragNow = null;
-  if (Math.abs(x1 - x0) < 10 || Math.abs(y1 - y0) < 10) return;
-  const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map((p) => applyHomography(state.Hinv, p));
-  const xs = pts.map((p) => clamp(p[0], 0, PAPER_W));
-  const ys = pts.map((p) => clamp(p[1], 0, state.paperH));
-  const x = Math.min(...xs);
-  const y = Math.min(...ys);
-  state.region = { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
-  setMode("ready");
-  hint("Area marked. Now say or type what you want there.");
+  if (state.headset || state.step !== "boxing") return;
+  if (setBox(state.boxStart, state.dragNow)) hint("Box set. Now say or type what you want there.");
 });
 
-const CORNER_NAMES = ["top-left", "top-right", "bottom-right", "bottom-left"];
-const cornerHint = () => `Tap the page's ${CORNER_NAMES[state.corners.length]} corner (${state.corners.length + 1}/4)`;
+// ---------- voice ----------
 
-function setCorners() {
-  state.paperH = Math.round(PAPER_W * Number($("paper").value));
-  try {
-    state.H = paperToImage(state.corners, PAPER_W, state.paperH);
-    state.Hinv = invert3x3(state.H);
-  } catch {
-    state.corners = [];
-    hint("Those corners didn't form a page. " + cornerHint());
-    return;
+let recognition = null;
+
+function listen(kind) {
+  if (!Recognition) {
+    return hint(state.headset ? "This browser has no speech input; use the phone view." : "Type it in the box below.");
   }
-  setMode("ready");
-  hint("Locked on. Keep the camera and page still. Ask whenever you're stuck.");
+  const before = state.step;
+  recognition = new Recognition();
+  recognition.interimResults = true;
+  let heard = "";
+  recognition.onresult = (e) => {
+    heard = [...e.results].map((r) => r[0].transcript).join("");
+    hint(`“${heard}”`);
+    if (!state.headset) $(kind === "request" ? "request" : "feedback").value = heard;
+  };
+  recognition.onerror = () => {};
+  recognition.onend = () => {
+    recognition = null;
+    $("mic").classList.remove("active");
+    state.step = before;
+    heard = heard.trim();
+    if (!heard) return hint(kind === "request" ? "Didn't catch that. Tap and try again." : "Didn't catch that.");
+    kind === "request" ? ask(heard) : handleFeedback(heard);
+  };
+  state.step = "listening";
+  $("mic").classList.add("active");
+  hint(kind === "request" ? "Listening… what should go in the box?" : "Listening… what should change?");
+  recognition.start();
 }
 
-// ---------- asking ----------
+function stopListening() {
+  recognition?.stop();
+}
 
-async function ask() {
-  if (!state.H) return;
-  const request = $("request").value.trim();
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  const frame = grabFrame();
-  const uploadH = Math.round(UPLOAD_W * (state.paperH / PAPER_W));
-  const image = makeUploadImage(rectifyRGBA(frame, grab.width, grab.height, state.H, PAPER_W, state.paperH, UPLOAD_W, uploadH), UPLOAD_W, uploadH);
-  state.baseline = trackingGray(frame);
+function handleFeedback(text) {
+  if (/^(hide|clear|remove|done|cancel|stop|never ?mind)\b/i.test(text)) return finish("Outline hidden.");
+  if (state.result.suggestions.length > 1) {
+    if (/^(next|another)\b/i.test(text)) return selectSuggestion(state.index + 1);
+    if (/^(previous|back)\b/i.test(text)) return selectSuggestion(state.index - 1);
+  }
+  revise(text);
+}
 
-  setMode("waiting");
-  hint("Looking at your drawing…");
+// "Give me ideas…" and "just the guides…" pick the mode by voice.
+function modeFor(text) {
+  if (/\b(ideas|options)\b/i.test(text)) return "options";
+  if (/\b(guides?|guidelines|construction)\b/i.test(text)) return "scaffold";
+  return document.querySelector('input[name="mode"]:checked').value;
+}
+
+// ---------- asking and revising ----------
+
+async function ask(request) {
+  state.request = request;
+  state.feedback = [];
+  state.mode = modeFor(request);
+  await requestSuggestion({ request, mode: state.mode });
+}
+
+async function revise(feedback) {
+  state.feedback.push(feedback);
+  await requestSuggestion({
+    request: state.request,
+    mode: state.mode,
+    revision: { previous: current(), feedback: state.feedback },
+  });
+}
+
+async function requestSuggestion(body) {
+  if (!state.H) return hint("Can't see the page right now. Look at it and try again.");
+  const { image, baseline } = capturePage();
+  const previous = state.result;
+  state.step = "waiting";
+  hint(body.revision ? "Changing it…" : "Looking at your drawing…");
   try {
     const res = await fetch("/api/suggest", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ image, request, mode, region: state.region, paper: { w: PAPER_W, h: state.paperH } }),
+      body: JSON.stringify({
+        ...body,
+        image,
+        region: state.box,
+        paper: { w: state.layout.paperW, h: state.layout.paperH },
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    if (!data.suggestions?.length) throw new Error("No suggestion came back. Try being more specific.");
+    if (!data.suggestions?.length) throw new Error("no suggestion came back, try being more specific");
+    state.baseline = baseline;
     showResult(data);
   } catch (err) {
-    setMode("ready");
+    if (body.revision) state.feedback.pop();
+    state.result = previous;
+    state.step = previous ? "showing" : state.box ? "boxed" : "idle";
     hint(`Couldn't get a suggestion: ${err.message}`);
   }
 }
 
-// The model places points much more accurately with a labeled grid to read.
-function makeUploadImage(rgba, w, h) {
+// Top-down image of the page for the model (with a labeled grid, which makes
+// its coordinates much more accurate) and a small grayscale baseline for
+// completion tracking, both from the same moment.
+function capturePage() {
+  const { paperW, paperH } = state.layout;
+  const full = document.createElement("canvas");
+  full.width = video.videoWidth;
+  full.height = video.videoHeight;
+  const fctx = full.getContext("2d");
+  fctx.drawImage(video, 0, 0);
+  const pixels = fctx.getImageData(0, 0, full.width, full.height).data;
+  const upH = Math.round((UPLOAD_W * paperH) / paperW);
+  const rgba = rectifyRGBA(pixels, full.width, full.height, state.H, paperW, paperH, UPLOAD_W, upH);
+  const baseline = toGray(rectifyRGBA(pixels, full.width, full.height, state.H, paperW, paperH, TRACK_W, trackH()));
+  return { image: withGrid(rgba, UPLOAD_W, upH), baseline };
+}
+
+function withGrid(rgba, w, h) {
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
   const g = c.getContext("2d");
   g.putImageData(new ImageData(rgba, w, h), 0, 0);
-  const px = w / PAPER_W;
+  const { paperW, paperH } = state.layout;
+  const px = w / paperW;
   g.strokeStyle = "rgb(0 150 255 / 0.25)";
   g.fillStyle = "rgb(0 120 220 / 0.8)";
   g.lineWidth = 1;
   g.font = "11px sans-serif";
-  for (let u = 100; u < PAPER_W; u += 100) {
+  for (let u = 100; u < paperW; u += 100) {
     g.beginPath();
     g.moveTo(u * px, 0);
     g.lineTo(u * px, h);
     g.stroke();
     g.fillText(String(u), u * px + 2, 11);
   }
-  for (let v = 100; v < state.paperH; v += 100) {
+  for (let v = 100; v < paperH; v += 100) {
     g.beginPath();
     g.moveTo(0, v * px);
     g.lineTo(w, v * px);
@@ -273,14 +489,14 @@ function makeUploadImage(rgba, w, h) {
 
 function showResult(data) {
   state.result = data;
-  state.index = 0;
   $("understood").textContent = data.understood;
   $("result").hidden = false;
   const many = data.suggestions.length > 1;
   $("prev").hidden = $("next").hidden = !many;
   selectSuggestion(0);
-  setMode("showing");
-  hint(many ? "Three ideas: flip through them, then trace the one you like." : "Trace the outline. It fades as you go.");
+  state.step = "showing";
+  const how = state.headset ? "Tap to ask for changes" : "Not quite? Say or type what to change";
+  hint(many ? `Three ideas. Say “next” to flip, or describe a change.` : `Trace it. ${how}. It clears 3 s after you stop.`);
 }
 
 function selectSuggestion(i) {
@@ -301,9 +517,10 @@ function selectSuggestion(i) {
     baseline: state.baseline,
     width: TRACK_W,
     height: trackH(),
-    paperW: PAPER_W,
-    paperH: state.paperH,
+    paperW: state.layout.paperW,
+    paperH: state.layout.paperH,
     strokes: s.strokes,
+    now: performance.now(),
   });
   state.trackState = null;
   state.fadeStart = 0;
@@ -312,98 +529,99 @@ function selectSuggestion(i) {
 const current = () => state.result?.suggestions[state.index];
 
 function finish(message) {
-  state.result = state.tracker = state.trackState = null;
-  state.fadeStart = 0;
-  state.region = null;
+  stopListening();
+  Object.assign(state, { result: null, tracker: null, trackState: null, fadeStart: 0, box: null, feedback: [] });
+  state.step = "idle";
   $("result").hidden = true;
-  $("request").value = "";
-  setMode("ready");
+  $("request").value = $("feedback").value = "";
   hint(message);
 }
 
-// ---------- completion tracking ----------
+// ---------- completion: clear 3 s after the user stops tracing ----------
 
-function grabFrame() {
-  grabCtx.drawImage(video, 0, 0, grab.width, grab.height);
-  return grabCtx.getImageData(0, 0, grab.width, grab.height).data;
-}
-
-const trackH = () => Math.round(TRACK_W * (state.paperH / PAPER_W));
-
-function trackingGray(frame) {
-  return toGray(rectifyRGBA(frame, grab.width, grab.height, state.H, PAPER_W, state.paperH, TRACK_W, trackH()));
-}
+const trackH = () => Math.round((TRACK_W * state.layout.paperH) / state.layout.paperW);
 
 setInterval(() => {
-  if (state.mode !== "showing" || !state.tracker || state.fadeStart) return;
-  const s = state.tracker.update(trackingGray(grabFrame()));
-  state.trackState = s;
-  if (s.occluded) {
-    state.occludedSince ||= performance.now();
-    if (performance.now() - state.occludedSince > OCCLUDED_HINT_MS) {
-      hint("Lots changed on the page. If it moved, tap Set corners again.");
-    }
-  } else {
-    state.occludedSince = 0;
-  }
-  if (s.done) state.fadeStart = performance.now();
+  if (!state.tracker || state.fadeStart || !state.H || !state.detImage) return;
+  const now = performance.now();
+  // Skip frames while the head (or page) is moving fast: they're blurry and
+  // misaligned. A still-enough view comes back within a moment.
+  const moving = pageMotion(state.trackH, state.H, state.layout) > video.videoWidth * 0.02;
+  state.trackH = state.H;
+  if (moving) return;
+  const k = det.width / video.videoWidth;
+  const Hdet = multiply([k, 0, 0, 0, k, 0, 0, 0, 1], state.H);
+  const { paperW, paperH } = state.layout;
+  const img = state.detImage;
+  const gray = toGray(rectifyRGBA(img.data, img.width, img.height, Hdet, paperW, paperH, TRACK_W, trackH()));
+  state.trackState = state.tracker.update(gray, now);
+  if (state.trackState.done) state.fadeStart = now;
 }, TRACK_MS);
 
 // ---------- controls ----------
 
-function setMode(mode) {
-  state.mode = mode;
-  const calibrated = !!state.H;
-  $("region").disabled = !calibrated || mode === "waiting";
-  $("region").classList.toggle("active", mode === "region");
-  $("request").disabled = $("ask").disabled = !calibrated || mode === "waiting";
-  $("mic").disabled = !calibrated || mode === "waiting" || !Recognition;
-}
-
 function hint(text) {
+  state.hintText = text;
   $("hint").textContent = text;
 }
 
-$("calibrate").onclick = () => {
-  if (state.mode === "showing") finish("");
-  state.corners = [];
-  state.H = state.Hinv = null;
-  setMode("calibrating");
-  hint(cornerHint());
+$("paper").onchange = () => {
+  state.layout = boardLayout($("paper").value);
+  if (state.paperTracker) state.paperTracker = new PaperTracker(new AR.Detector(), state.layout);
+  $("template").href = `template.html?size=${$("paper").value}`;
+  finish("Paper size changed.");
 };
 
-$("region").onclick = () => {
-  if (state.mode === "region") return setMode("ready");
-  state.region = null;
-  setMode("region");
-  hint("Drag a box where the suggestion should go.");
+$("ask").onclick = () => {
+  const text = $("request").value.trim();
+  if (state.step === "waiting" || state.step === "listening") return;
+  ask(text);
 };
-
-$("ask").onclick = ask;
-$("request").addEventListener("keydown", (e) => e.key === "Enter" && ask());
+$("request").addEventListener("keydown", (e) => e.key === "Enter" && $("ask").click());
+$("change").onclick = () => {
+  const text = $("feedback").value.trim();
+  if (!text || !state.result || state.step === "waiting") return;
+  $("feedback").value = "";
+  handleFeedback(text);
+};
+$("feedback").addEventListener("keydown", (e) => e.key === "Enter" && $("change").click());
 $("prev").onclick = () => selectSuggestion(state.index - 1);
 $("next").onclick = () => selectSuggestion(state.index + 1);
 $("dismiss").onclick = () => finish("Outline hidden.");
+$("mic").onclick = () => {
+  if (state.step === "listening") return stopListening();
+  listen(state.result ? "feedback" : "request");
+};
+if (!Recognition) $("mic").hidden = true;
 
-// Hold-to-talk: speech fills the box and asks as soon as you let go.
-const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (Recognition) {
-  const rec = new Recognition();
-  rec.interimResults = true;
-  rec.onresult = (e) => ($("request").value = [...e.results].map((r) => r[0].transcript).join(""));
-  rec.onend = () => {
-    $("mic").classList.remove("active");
-    if ($("request").value.trim()) ask();
-  };
-  $("mic").addEventListener("pointerdown", () => {
-    $("request").value = "";
-    $("mic").classList.add("active");
-    rec.start();
-  });
-  $("mic").addEventListener("pointerup", () => rec.stop());
-} else {
-  $("mic").hidden = true;
-}
+$("enter-headset").onclick = async () => {
+  try {
+    await document.documentElement.requestFullscreen();
+    await screen.orientation?.lock?.("landscape");
+  } catch {
+    // Fullscreen or orientation lock can be refused; the view still works.
+  }
+  try {
+    state.wakeLock = await navigator.wakeLock?.request("screen");
+  } catch {
+    // Not supported; the screen may dim during long sessions.
+  }
+  state.headset = true;
+  document.body.classList.add("headset");
+  resize();
+  if (!state.H) hint("Look at your printed page.");
+  else if (state.result) hint("Trace it. Tap to ask for changes. It clears 3 s after you stop.");
+  else if (state.box) hint("Tap, then say what should go in the box.");
+  else hint(idleHint());
+};
+
+document.addEventListener("fullscreenchange", () => {
+  if (document.fullscreenElement || !state.headset) return;
+  state.headset = false;
+  state.wakeLock?.release?.();
+  document.body.classList.remove("headset");
+  resize();
+});
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DrawCompanion Template</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: light; }
+    body { margin: 0; background: #e9ebee; font: 15px/1.4 system-ui, sans-serif; color: #222; }
+    .controls { padding: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .controls p { margin: 0; color: #555; flex-basis: 100%; }
+    button, select { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid #bbb; background: #fff; }
+    .sheet { position: relative; background: #fff; margin: 0 auto 32px; box-shadow: 0 2px 12px rgb(0 0 0 / 0.15); }
+    .frame { position: absolute; border: 0.2mm solid #d6d6d6; box-sizing: border-box; }
+    .marker { position: absolute; }
+    .marker svg { display: block; width: 100%; height: 100%; shape-rendering: crispEdges; }
+    @media print {
+      body { background: none; }
+      .controls { display: none; }
+      .sheet { margin: 0; box-shadow: none; }
+    }
+  </style>
+  <style id="page-size"></style>
+</head>
+<body>
+  <div class="controls">
+    <select id="size" aria-label="Paper size">
+      <option value="a4">A4</option>
+      <option value="letter">US Letter</option>
+    </select>
+    <button onclick="print()">Print</button>
+    <p>Print at 100% / actual size, without "fit to page". Draw inside the grey frame. Keep the black squares visible and uncovered as much as you can; DrawCompanion uses them to find the page.</p>
+  </div>
+  <div class="sheet" id="sheet"></div>
+
+  <script src="vendor/js-aruco2/cv.js"></script>
+  <script src="vendor/js-aruco2/aruco.js"></script>
+  <script type="module">
+    import { boardLayout } from "./board.js";
+
+    const select = document.getElementById("size");
+    const size = new URLSearchParams(location.search).get("size") ?? "a4";
+    select.value = size;
+    select.onchange = () => (location.search = `?size=${select.value}`);
+
+    const layout = boardLayout(size);
+    const { sheet, marginMm, frameMm } = layout;
+    const mmPerUnit = frameMm.w / layout.paperW;
+    const dict = new AR.Dictionary("ARUCO_MIP_36h12");
+
+    document.getElementById("page-size").textContent = `@page { size: ${sheet.w}mm ${sheet.h}mm; margin: 0; }`;
+    const el = document.getElementById("sheet");
+    el.style.width = `${sheet.w}mm`;
+    el.style.height = `${sheet.h}mm`;
+    el.innerHTML = `<div class="frame" style="left:${marginMm}mm;top:${marginMm}mm;width:${frameMm.w}mm;height:${frameMm.h}mm"></div>`;
+
+    for (const m of layout.markers) {
+      // The SVG is 10 cells: 1 white quiet-zone cell, then the 8-cell black square.
+      const cell = (m.size * mmPerUnit) / 8;
+      const div = document.createElement("div");
+      div.className = "marker";
+      Object.assign(div.style, {
+        left: `${marginMm + m.x * mmPerUnit - cell}mm`,
+        top: `${marginMm + m.y * mmPerUnit - cell}mm`,
+        width: `${cell * 10}mm`,
+        height: `${cell * 10}mm`,
+      });
+      div.innerHTML = dict.generateSVG(m.id);
+      el.append(div);
+    }
+  </script>
+</body>
+</html>

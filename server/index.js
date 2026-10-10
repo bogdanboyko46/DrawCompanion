@@ -45,7 +45,7 @@ async function handleSuggest(req, res) {
   }
   const match = /^data:(image\/(?:jpeg|png|webp));base64,(.+)$/.exec(body.image ?? "");
   if (!match || !body.paper?.w || !body.paper?.h) {
-    return send(res, 400, { error: "Expected { image: dataURL, paper: {w, h}, request, mode, region? }" });
+    return send(res, 400, { error: "Expected { image: dataURL, paper: {w, h}, request, mode, region?, revision? }" });
   }
   const args = {
     mediaType: match[1],
@@ -54,12 +54,14 @@ async function handleSuggest(req, res) {
     mode: ["outline", "scaffold", "options"].includes(body.mode) ? body.mode : "outline",
     region: body.region ?? null,
     paper: body.paper,
+    revision: parseRevision(body.revision),
   };
 
   const started = Date.now();
   try {
     const result = MOCK ? mockSuggestion(args) : await suggest(args);
-    console.log(`suggest mode=${args.mode} ${Date.now() - started}ms "${args.request}"`);
+    const what = args.revision ? `revise "${args.revision.feedback.at(-1)}"` : `"${args.request}"`;
+    console.log(`suggest mode=${args.mode} ${Date.now() - started}ms ${what}`);
     send(res, 200, result);
   } catch (err) {
     if (err instanceof SuggestError) return send(res, 422, { error: err.message });
@@ -68,6 +70,14 @@ async function handleSuggest(req, res) {
     if (err instanceof Anthropic.APIError) return send(res, 502, { error: `Model error ${err.status}` });
     throw err;
   }
+}
+
+function parseRevision(rev) {
+  if (!rev?.previous || !Array.isArray(rev.feedback) || !rev.feedback.length) return null;
+  return {
+    previous: rev.previous,
+    feedback: rev.feedback.slice(-5).map((f) => String(f).slice(0, 300)),
+  };
 }
 
 async function serveStatic(req, res) {

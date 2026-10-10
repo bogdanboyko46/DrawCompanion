@@ -17,19 +17,16 @@
     <section id="panel">
       <div class="row">
         <select id="paper" aria-label="Paper size">
-          <option value="1.4142">A-series (A4, A5…)</option>
-          <option value="1.2941">US Letter</option>
-          <option value="1">Square</option>
-          <option value="0.7071">A-series, landscape</option>
-          <option value="0.7727">Letter, landscape</option>
+          <option value="a4">A4 template</option>
+          <option value="letter">US Letter template</option>
         </select>
-        <button id="calibrate">Set corners</button>
-        <button id="region" disabled>Mark area</button>
+        <a id="template" href="template.html?size=a4" target="_blank">Print template</a>
+        <button id="enter-headset" class="primary">Headset view</button>
       </div>
 
       <div class="row">
-        <input id="request" type="text" placeholder="What are you stuck on? e.g. “add a cat on the windowsill”" disabled>
-        <button id="mic" title="Hold to talk" disabled aria-label="Hold to talk">🎤</button>
+        <input id="request" type="text" placeholder="Drag a box on the page, then: e.g. “a cat sitting here”">
+        <button id="mic" title="Talk" aria-label="Talk">🎤</button>
       </div>
 
       <div class="row">
@@ -38,13 +35,17 @@
           <label><input type="radio" name="mode" value="scaffold"> Guides only</label>
           <label><input type="radio" name="mode" value="options"> 3 ideas</label>
         </div>
-        <button id="ask" class="primary" disabled>Suggest</button>
+        <button id="ask">Suggest</button>
       </div>
 
       <div id="result" hidden>
         <p id="understood"></p>
         <div id="palette"></div>
         <ol id="steps"></ol>
+        <div class="row">
+          <input id="feedback" type="text" placeholder="Not quite? e.g. “smaller, facing left”">
+          <button id="change">Change it</button>
+        </div>
         <div class="row">
           <button id="prev" hidden>‹ Idea</button>
           <button id="next" hidden>Idea ›</button>
@@ -53,6 +54,8 @@
       </div>
     </section>
   </main>
+  <script src="vendor/js-aruco2/cv.js"></script>
+  <script src="vendor/js-aruco2/aruco.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

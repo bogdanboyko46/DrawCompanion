@@ -1,0 +1,2 @@
+js-aruco2 2.0.0 (MIT), https://www.npmjs.com/package/js-aruco2
+Unmodified copies of src/cv.js and src/aruco.js, loaded as classic scripts (they define window.CV and window.AR).

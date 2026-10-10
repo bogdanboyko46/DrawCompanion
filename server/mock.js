@@ -2,7 +2,7 @@
 // developed and demoed without API calls. Draws a simple flower sized to the
 // marked region (or the lower-right quarter of the page).
 
-export function mockSuggestion({ region, paper, mode }) {
+export function mockSuggestion({ region, paper, mode, revision }) {
   const box = region ?? { x: paper.w * 0.55, y: paper.h * 0.55, w: paper.w * 0.35, h: paper.h * 0.35 };
   const cx = box.x + box.w / 2;
   const s = Math.min(box.w, box.h);
@@ -59,8 +59,15 @@ export function mockSuggestion({ region, paper, mode }) {
     ],
     steps: ["Lightly draw the guide circle and stem line", "Add the center, then the petals", "Draw the stem"],
   };
+  if (revision) {
+    return {
+      understood: `Mock revision for: "${revision.feedback.at(-1)}" (mock mode returns the same flower).`,
+      style_notes: "Mock response; no image analysis was done.",
+      suggestions: [suggestion],
+    };
+  }
   return {
-    understood: "Mock mode: a flower placed in the marked region.",
+    understood: "Mock mode: a flower placed in the marked box.",
     style_notes: "Mock response; no image analysis was done.",
     suggestions: mode === "options" ? [suggestion, suggestion, suggestion] : [suggestion],
   };

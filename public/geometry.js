@@ -2,21 +2,30 @@
 // paper coordinates to camera pixels (and its inverse maps back). Matrices
 // are row-major arrays of 9 numbers.
 
-// Homography taking src[i] -> dst[i] for four point pairs.
+// Least-squares homography taking src[i] -> dst[i] (at least 4 pairs).
+// Points are normalized first (Hartley) so pixel- and paper-scale
+// coordinates don't wreck the conditioning.
 export function homographyFromPoints(src, dst) {
-  if (src.length !== 4 || dst.length !== 4) throw new Error("need exactly 4 point pairs");
-  const A = [];
-  const b = [];
-  for (let i = 0; i < 4; i++) {
-    const [x, y] = src[i];
-    const [u, v] = dst[i];
-    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
-    b.push(u);
-    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
-    b.push(v);
+  if (src.length < 4 || src.length !== dst.length) throw new Error("need at least 4 point pairs");
+  const Ts = normalizer(src);
+  const Td = normalizer(dst);
+  const ATA = Array.from({ length: 8 }, () => new Array(8).fill(0));
+  const ATb = new Array(8).fill(0);
+  const add = (row, rhs) => {
+    for (let i = 0; i < 8; i++) {
+      ATb[i] += row[i] * rhs;
+      for (let j = 0; j < 8; j++) ATA[i][j] += row[i] * row[j];
+    }
+  };
+  for (let i = 0; i < src.length; i++) {
+    const [x, y] = applyHomography(Ts, src[i]);
+    const [u, v] = applyHomography(Td, dst[i]);
+    add([x, y, 1, 0, 0, 0, -u * x, -u * y], u);
+    add([0, 0, 0, x, y, 1, -v * x, -v * y], v);
   }
-  const h = solve(A, b);
-  return [...h, 1];
+  const Hn = [...solve(ATA, ATb), 1];
+  const H = multiply(invert3x3(Td), multiply(Hn, Ts));
+  return H.map((h) => h / H[8]);
 }
 
 export function applyHomography(H, [x, y]) {
@@ -37,30 +46,6 @@ export function invert3x3(m) {
     B * s, (a * i - c * g) * s, -(a * f - c * d) * s,
     C * s, -(a * h - b * g) * s, (a * e - b * d) * s,
   ];
-}
-
-// Homography from paper units (0..paperW, 0..paperH) to the four tapped
-// corners, given in order top-left, top-right, bottom-right, bottom-left.
-export function paperToImage(corners, paperW, paperH) {
-  if (!isConvexQuad(corners)) throw new Error("corners must be tapped in order around the page");
-  const paper = [[0, 0], [paperW, 0], [paperW, paperH], [0, paperH]];
-  return homographyFromPoints(paper, corners);
-}
-
-// True when the points form a convex quadrilateral in a consistent winding.
-export function isConvexQuad(pts) {
-  if (pts.length !== 4) return false;
-  let sign = 0;
-  for (let i = 0; i < 4; i++) {
-    const [ax, ay] = pts[i];
-    const [bx, by] = pts[(i + 1) % 4];
-    const [cx, cy] = pts[(i + 2) % 4];
-    const cross = (bx - ax) * (cy - by) - (by - ay) * (cx - bx);
-    if (Math.abs(cross) < 1e-9) return false;
-    if (sign && Math.sign(cross) !== sign) return false;
-    sign = Math.sign(cross);
-  }
-  return true;
 }
 
 // Warp a camera frame into a top-down view of the paper.
@@ -96,6 +81,22 @@ export function toGray(rgba) {
   return g;
 }
 
+export function multiply(a, b) {
+  const m = new Array(9);
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++) m[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+  return m;
+}
+
+// Similarity transform moving points to their centroid, mean distance sqrt(2).
+function normalizer(pts) {
+  const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  const d = pts.reduce((s, p) => s + Math.hypot(p[0] - cx, p[1] - cy), 0) / pts.length || 1;
+  const k = Math.SQRT2 / d;
+  return [k, 0, -k * cx, 0, k, -k * cy, 0, 0, 1];
+}
+
 // Gaussian elimination with partial pivoting.
 function solve(A, b) {
   const n = b.length;
@@ -103,7 +104,7 @@ function solve(A, b) {
   for (let col = 0; col < n; col++) {
     let pivot = col;
     for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
-    if (Math.abs(M[pivot][col]) < 1e-12) throw new Error("degenerate points (three in a line?)");
+    if (Math.abs(M[pivot][col]) < 1e-12) throw new Error("degenerate points");
     [M[col], M[pivot]] = [M[pivot], M[col]];
     for (let r = 0; r < n; r++) {
       if (r === col) continue;

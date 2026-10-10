@@ -1,50 +1,53 @@
 # DrawCompanion
 
-An AR drawing assistant. You draw on real paper, and when you're stuck you ask for a suggestion. An outline that matches your drawing's style and colors appears on the paper, locked in place. Trace it, and it fades away.
+An AR drawing assistant. You draw on real paper wearing a lightweight headset (your phone in a head-mounted viewer). When you're stuck, look at the spot, box it with two taps, and say what you want. An outline matched to your drawing appears in the box. Not right? Tap and say what to change. Once you stop drawing on it for 3 seconds, it clears.
 
-This repo has a working **"magic window" prototype**: a phone or tablet camera over your page stands in for the headset. It also has a design doc that critiques the concept and lays out the path to a headset version: **[docs/DESIGN.md](docs/DESIGN.md)**.
+Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
-## How it works
+## Setup
 
-1. **Lock on:** tap the page's four corners once. From then on, everything is computed in paper coordinates.
-2. **Ask:** type or hold the mic button and speak. Optionally drag a box to mark where the suggestion should go. Pick a mode:
-   - **Outline:** guides plus contours to trace
-   - **Guides only:** construction shapes only; you draw the final lines
-   - **3 ideas:** three alternatives to flip through on the paper
-3. **Suggest:** the page (and only the page; the room is cropped out) is rectified to a top-down image with a labeled grid. Claude returns vector strokes, a palette from your drawing, and short steps.
-4. **Trace:** strokes dim as you trace them. Once you've traced most of the outline, it fades out. Hands and lighting changes are ignored.
+1. **Print the template:** open `/template.html` (A4 or US Letter) and print at 100%. Draw inside the grey frame. The black squares let the app find the page from any angle, so keep them uncovered when you can.
+2. **Run the server** (Node 20+):
 
-## Run it
+   ```bash
+   npm install
+   npm run mock   # canned suggestion (a flower), no API calls; for trying the flow
+   npm start      # real suggestions (uses ANTHROPIC_API_KEY or an `ant auth login` profile)
+   ```
 
-Requires Node 20+.
+3. **Open it on the phone.** Camera and microphone access need a secure context: `localhost` on the same machine, or HTTPS (for example through a tunnel) from the phone. Chrome on Android gives the best results (speech input, fullscreen, landscape lock).
 
-```bash
-npm install
+## Using it
 
-# Try the UI without API calls (returns a canned flower)
-npm run mock
+**Headset view** (tap *Headset view*, put the phone in the viewer):
 
-# Real suggestions (uses ANTHROPIC_API_KEY or an `ant auth login` profile)
-npm start
-```
+| You're… | Tap the viewer button to… |
+|---|---|
+| Ready | Start a box where the dot is |
+| Boxing | Finish the box at the dot; it then listens for your request |
+| Listening | Stop listening |
+| Seeing an outline | Say a change: "smaller", "facing left", "next idea", "hide" |
 
-Open http://localhost:8787. Camera access needs a secure context, so `localhost` works on the same machine. To use a phone, serve over HTTPS (for example through a tunnel) and open that URL on the phone.
+Say "some ideas for…" to get 3 options, or "just the guides for…" for construction lines only.
+
+**Phone view:** drag a box on the page, then type or tap 🎤. After a suggestion appears, use *Change it* for feedback.
 
 Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (default `claude-opus-5-5`), `DRAWCOMPANION_EFFORT` (default `low`, tuned for response speed).
-
-**Best setup:** prop the phone or tablet on a stand, looking down at the paper, and use even lighting. The prototype assumes the page doesn't move after you tap the corners. Tap **Set corners** again if it does.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `server/suggest.js` | Prompt, output schema, and Claude call; sanitizes returned strokes |
+| `server/suggest.js` | Prompt, output schema, Claude call (requests and feedback revisions); sanitizes strokes |
 | `server/index.js` | Static file server and `POST /api/suggest` |
-| `server/mock.js` | Canned response for offline UI work |
-| `public/geometry.js` | Homography (paper ⇄ camera) and page rectification |
-| `public/completion.js` | Decides when an outline has been traced (thin-line test, occlusion, lighting) |
-| `public/app.js` | Camera, calibration, asking, rendering, fade-out |
-| `docs/DESIGN.md` | Critique, improvements, architecture, roadmap |
+| `server/mock.js` | Canned response for trying the flow without API calls |
+| `public/app.js` | Camera, headset/phone views, look-and-tap, voice, requests, rendering |
+| `public/tracking.js` | Finds the template's markers every frame and computes the page pose |
+| `public/board.js` | Template geometry: frame size and marker positions in paper units |
+| `public/template.html` | The printable template |
+| `public/completion.js` | Decides when to clear the outline (3 s after you stop tracing it) |
+| `public/geometry.js` | Homography math and top-down page rectification |
+| `public/vendor/js-aruco2/` | Marker detection library (MIT) |
 
 ## Tests
 
@@ -52,4 +55,4 @@ Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_MODEL` (
 npm test
 ```
 
-Covers the homography math, page rectification, and the completion tracker: tracing, partial progress, stray ink, a hand over the outline, page-wide changes, and lighting shifts.
+Covers the homography math, page tracking from rendered templates (full view, mostly covered, downscaled, out of view), and the clearing rule: the 3-second countdown, restarts on new ink, waiting until tracing starts, hands, lighting changes and tracking jitter.

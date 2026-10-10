@@ -47,24 +47,27 @@ const Response = z.object({
 });
 
 const SYSTEM = `You are DrawCompanion, a drawing assistant that lives in an AR headset.
-The user is drawing on real paper and is stuck. You see a top-down, perspective-corrected photo of their page with a faint labeled coordinate grid (paper units; origin top-left, x right, y down). You reply with vector strokes that are projected onto the paper for them to trace.
+The user is drawing on real paper and is stuck. You see a top-down, perspective-corrected photo of their page with a faint labeled coordinate grid (paper units; origin top-left, x right, y down). The black-and-white squares in the corners and at the middle of the side edges are tracking markers: ignore them and never draw over them. You reply with vector strokes that are projected onto the paper for them to trace.
 
 How to make a good suggestion:
 - Continue THEIR drawing. Match subject matter, scale, perspective, line weight, and level of detail. A loose sketch gets a loose suggestion; a careful study gets careful lines.
-- Respect the composition: place the suggestion in empty space or exactly where the user asked, never on top of existing work unless they asked to modify it. Connect to existing lines where natural (a branch starts on the trunk; a hand attaches to the wrist).
+- When the user marks a box, that box is where the suggestion goes: fill it (the suggestion's bounding box should nearly match the box) and make it fit what is around the box: connect to lines that touch it, match the perspective and scale of neighboring objects.
+- Without a box, place the suggestion in empty space, never on top of existing work unless they asked to modify it. Connect to existing lines where natural (a branch starts on the trunk; a hand attaches to the wrist).
 - Prefer fewer, confident strokes over many. Start with construction strokes (simple shapes that set size and placement), then contours, then a little detail. Skip shading unless asked.
 - Coordinates must be accurate: use the grid labels to place points. Points must stay inside the page.
 - Palette: pick colors already present in the drawing first; add at most one complementary color.
+- When revising after feedback, change what the feedback asks for and keep everything else (placement, size, style) the same unless told otherwise.
 - If the request is vague ("what should I add?"), propose what would most improve the piece (balance, focal point, story) and say why in 'understood'.`;
 
 let client;
 
-export async function suggest({ imageBase64, mediaType, request, mode, region, paper }) {
+// revision (optional): { previous: <a suggestion we returned>, feedback: [strings, oldest first] }
+export async function suggest({ imageBase64, mediaType, request, mode, region, paper, revision }) {
   client ??= new Anthropic();
-  const count = mode === "options" ? 3 : 1;
+  const count = mode === "options" && !revision ? 3 : 1;
   const regionText = region
-    ? `The user marked this region for the suggestion: x=${r(region.x)}, y=${r(region.y)}, w=${r(region.w)}, h=${r(region.h)}.`
-    : "No region marked: choose the best placement.";
+    ? `The user marked a box for the suggestion: x=${r(region.x)}, y=${r(region.y)}, w=${r(region.w)}, h=${r(region.h)}.`
+    : "No box marked: choose the best placement.";
   const modeText = {
     outline: "Give one suggestion with construction, contour and detail strokes.",
     scaffold:
@@ -73,12 +76,24 @@ export async function suggest({ imageBase64, mediaType, request, mode, region, p
       "Give exactly 3 different suggestions (different ideas, not small variations), each lighter on detail so they can be previewed side by side.",
   }[mode] ?? "";
 
-  const userText = [
+  const lines = [
     `Page size: ${paper.w} x ${paper.h} paper units.`,
     regionText,
-    modeText,
+    revision ? "" : modeText,
     `User request: "${request || "I'm stuck, what should I add?"}"`,
-  ].join("\n");
+  ];
+  if (revision) {
+    lines.push(
+      `You already suggested this (the photo may show they have started drawing it):`,
+      JSON.stringify(revision.previous),
+      `They want changes. Feedback, oldest first:`,
+      ...revision.feedback.map((f) => `- "${f}"`),
+      mode === "scaffold"
+        ? "Return one revised suggestion, still using ONLY construction strokes."
+        : "Return one revised suggestion.",
+    );
+  }
+  const userText = lines.filter(Boolean).join("\n");
 
   let response;
   try {

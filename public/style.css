@@ -88,6 +88,14 @@ select, button {
   cursor: pointer;
 }
 
+a { color: var(--accent); }
+
+/* Headset view: the canvas is the whole screen, split into two eyes. */
+body.headset #panel,
+body.headset #hint { display: none; }
+body.headset #stage { position: fixed; inset: 0; }
+body.headset #view { width: 100vw; height: 100vh; max-width: none; max-height: none; }
+
 button:disabled { opacity: 0.45; cursor: default; }
 button.primary { background: var(--accent); color: #001018; border-color: transparent; font-weight: 600; }
 button.active { outline: 2px solid var(--accent); }
