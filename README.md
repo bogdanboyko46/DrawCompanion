@@ -4,6 +4,11 @@ An AR drawing assistant. You draw on real paper wearing a lightweight headset (y
 
 Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
+## Two ways to run it
+
+- **iPhone app (recommended): [ios/README.md](ios/README.md).** Open `ios/DrawCompanionAR.xcodeproj` in Xcode and run it on your iPhone. The phone finds the paper on its own (no printed template), listens with Apple's speech recognition, and calls Claude directly with the key you paste into its settings. No server needed.
+- **Web version (below):** a Node server plus a browser page. Needs the printed template. Handy for trying ideas quickly on any phone or laptop.
+
 ## Setup
 
 1. **Print the template:** open `/template.html` (A4 or US Letter) and print at 100%. Draw inside the grey frame. The black squares let the app find the page from any angle, so keep them uncovered when you can.
