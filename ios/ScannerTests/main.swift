@@ -92,6 +92,18 @@ func average(_ image: CIImage, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) -
     return px.prefix(3).map(Double.init)
 }
 
+/// A small JPEG, base64, so results can be looked at straight from the CI log.
+func thumbnail(_ image: CGImage, maxSide: CGFloat = 240) -> String {
+    var ciImage = CIImage(cgImage: image)
+    let scale = maxSide / max(ciImage.extent.width, ciImage.extent.height)
+    ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    // Show transparency over a dark backdrop.
+    ciImage = ciImage.composited(over: CIImage(color: CIColor(red: 0.2, green: 0.2, blue: 0.3)).cropped(to: ciImage.extent))
+    let data = ci.jpegRepresentation(of: ciImage, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                     options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.6]) ?? Data()
+    return data.base64EncodedString()
+}
+
 let original = CIImage(cgImage: load(fixtures.appendingPathComponent("drawing-original.png")))
 
 for c in spec.cases {
@@ -145,6 +157,22 @@ for c in spec.cases {
     let otherWay = portrait ? difference(out, original.oriented(.down)) : difference(out, original.oriented(.left))
     check(diff < 22 && diff < otherWay, "matches the original drawing, right way up for the screen (diff \(String(format: "%.1f", diff)) vs \(String(format: "%.1f", otherWay)) flipped)")
 
+    // Colors: the drawing's own colors survive (not washed out or tinted).
+    // Regions in page fractions (u right, v down) on the original drawing.
+    let regions: [(String, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        ("orange body", 0.31, 0.55, 0.04, 0.04),
+        ("cream belly", 0.47, 0.60, 0.06, 0.05),
+        ("blue scarf", 0.40, 0.415, 0.08, 0.02),
+    ]
+    for (label, u, v, du, dv) in regions {
+        let want = average(original, x: u, y: v, w: du, h: dv)
+        // On screen a turned page is rotated 90° clockwise: page (u, v) → screen (1 - v, u).
+        let got = portrait ? average(out, x: u, y: v, w: du, h: dv) : average(out, x: 1 - v - dv, y: u, w: dv, h: du)
+        let worst = zip(want, got).map { abs($0 - $1) }.max()!
+        check(worst < 40, "\(label) keeps its color: \(got.map { Int($0) }) vs drawn \(want.map { Int($0) })")
+    }
+    print("THUMB \(name)-rectified \(thumbnail(rectified))")
+
     // White balance: blank paper should come out neutral and bright.
     // Sample a blank margin of the page (the drawing's top-left area is empty).
     let rawCorner = average(CIImage(cgImage: image),
@@ -161,6 +189,7 @@ for c in spec.cases {
     let started2 = Date()
     if let cut = PageScanner.cutout(rectified, cropped: false) {
         save(cut, "\(name)-cutout.png")
+        print("THUMB \(name)-cutout \(thumbnail(cut))")
         let px = pixels(CIImage(cgImage: cut), 64, 90)
         let coverage = Double(stride(from: 3, to: px.count, by: 4).filter { px[$0] > 128 }.count) / Double(64 * 90)
         check(cut.width == rectified.width && cut.height == rectified.height, "cutout keeps the page frame (\(cut.width)×\(cut.height))")
