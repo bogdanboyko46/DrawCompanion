@@ -6,14 +6,17 @@
 // Two stages, because most of what an always-on microphone hears is chatter:
 //   1. filter (Claude Haiku, text only): new | revise | hide | ignore.
 //      Fast and nearly free; most phrases stop here.
-//   2. draw (Claude Opus, with the page photo): only for new / revise.
+//   2. draw (Claude Sonnet, with the page photo): only for new / revise.
+//      Streams: each stroke is passed on the moment it's complete, so the
+//      first lines appear while the rest are still being written.
 
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
+import { flattenPath, StrokeScanner } from "./path.js";
 
 const FILTER_MODEL = process.env.DRAWCOMPANION_FILTER_MODEL || "claude-haiku-5-5";
-const DRAW_MODEL = process.env.DRAWCOMPANION_DRAW_MODEL || "claude-opus-5-5";
+const DRAW_MODEL = process.env.DRAWCOMPANION_DRAW_MODEL || "claude-sonnet-5-5";
 // Latency matters more than depth here: the user is mid-drawing, waiting.
 const DRAW_EFFORT = process.env.DRAWCOMPANION_DRAW_EFFORT || "low";
 
@@ -73,22 +76,18 @@ const Stroke = z.object({
     .describe(
       "construction = proportion/perspective guides (circles, boxes, center lines); contour = main silhouette; detail = interior lines; shading = hatching hints",
     ),
-  points: z
-    .array(z.array(z.number()))
-    .describe("Polyline as [x, y] pairs in paper units. 4–60 points; densify curves."),
-  closed: z.boolean(),
   weight: z.enum(["light", "medium", "bold"]),
+  d: z
+    .string()
+    .describe(
+      "One continuous line as SVG path data, absolute commands only: M x y, L x y, Q cx cy x y, C c1x c1y c2x c2y x y, Z to close. Integers in paper units. Use curves (Q/C) rather than many short L segments.",
+    ),
 });
 
-const Suggestion = z.object({
-  placement: z
-    .object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() })
-    .describe("Bounding box of the suggestion in paper units"),
-  strokes: z.array(Stroke),
-});
+const Drawing = z.object({ strokes: z.array(Stroke) });
 
 const DRAW_SYSTEM = `You are DrawCompanion, a silent drawing assistant inside an AR headset.
-The user is drawing on real paper and asked (out loud) for help. You never reply in words. Your only output is an outline, as vector strokes, that is projected onto their paper for them to trace.
+The user is drawing on real paper and asked (out loud) for help. You never reply in words. Your only output is an outline, as vector strokes, that is projected onto their paper for them to trace. They are waiting, so be quick: decide and draw.
 
 You get a top-down, perspective-corrected photo of their page with a faint labeled coordinate grid (paper units; origin top-left, x right, y down), what they said, and the outline currently shown (if any). The black-and-white squares in the corners and at the middle of the side edges are tracking markers: ignore them and never draw over them.
 
@@ -98,16 +97,19 @@ Choosing where it goes (it's entirely your call):
 
 How to draw it:
 - Continue THEIR drawing. Match subject matter, scale, perspective, line weight, and level of detail. A loose sketch gets a loose suggestion; a careful study gets careful lines.
-- Prefer fewer, confident strokes. Start with construction strokes (simple shapes that set size and placement), then contours, then a little detail. Skip shading unless asked. If they ask for just guidelines, use only construction strokes.
+- Order matters: strokes appear on the paper one by one as you write them. Write construction strokes first (simple shapes that set size and placement), then contours, then a little detail. Skip shading unless asked. If they ask for just guidelines, write only construction strokes.
+- Prefer fewer, confident strokes, each a smooth path built from curves.
 - When revising, change what they asked for and keep everything else (placement, size, style) the same.
 - Coordinates must be accurate: use the grid labels to place points. Points must stay inside the page.`;
 
-export async function draw({ client, imageBase64, mediaType, paper, utterances, current, action, signal }) {
+// Streams the drawing; calls onStroke({ role, weight, d, closed, points }) as
+// each stroke completes. Returns the number of strokes delivered.
+export async function draw({ client, imageBase64, mediaType, paper, utterances, current, action, signal, onStroke }) {
   const lines = [`Page size: ${paper.w} x ${paper.h} paper units.`];
   if (action === "revise") {
     lines.push(
       "Outline currently shown:",
-      JSON.stringify(current.suggestion),
+      JSON.stringify({ strokes: current.suggestion.strokes.map(({ role, weight, d }) => ({ role, weight, d })) }),
       "It was drawn from these requests, oldest first:",
       ...quote(current.history),
       "They now said, oldest first:",
@@ -118,14 +120,13 @@ export async function draw({ client, imageBase64, mediaType, paper, utterances, 
     lines.push("They said, oldest first:", ...quote(utterances), "Draw a new suggestion for this.");
   }
 
-  const response = await parse(
-    client,
+  const stream = client.beta.messages.stream(
     {
       model: DRAW_MODEL,
       max_tokens: 16000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      output_config: { effort: DRAW_EFFORT, format: betaZodOutputFormat(Suggestion) },
+      output_config: { effort: DRAW_EFFORT, format: betaZodOutputFormat(Drawing) },
       system: DRAW_SYSTEM,
       messages: [
         {
@@ -137,11 +138,52 @@ export async function draw({ client, imageBase64, mediaType, paper, utterances, 
         },
       ],
     },
-    signal,
+    { signal },
   );
-  if (response.stop_reason === "refusal") return null;
-  if (!response.parsed_output) throw new SuggestError(`no outline (stop_reason: ${response.stop_reason})`);
-  return sanitize(response.parsed_output, paper);
+
+  let scanner = new StrokeScanner();
+  let delivered = 0;
+  let stopReason = null;
+  try {
+    for await (const event of stream) {
+      if (event.type === "content_block_start" && event.content_block.type === "text") {
+        scanner = new StrokeScanner(); // a fallback model starts its answer over
+      } else if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+        for (const json of scanner.push(event.delta.text)) {
+          for (const stroke of toStrokes(json, paper)) {
+            onStroke(stroke);
+            delivered++;
+          }
+        }
+      } else if (event.type === "message_delta") {
+        stopReason = event.delta.stop_reason ?? stopReason;
+      }
+    }
+  } catch (err) {
+    // The SDK parses the whole answer at the end; strokes already shown were
+    // validated one by one, so a final parse failure only matters if none were.
+    const parseFailure = err instanceof Anthropic.AnthropicError && !(err instanceof Anthropic.APIError);
+    if (!parseFailure) throw err;
+    if (!delivered) throw new SuggestError("malformed model output");
+  }
+  if (!delivered && stopReason !== "refusal" && stopReason !== "end_turn") {
+    throw new SuggestError(`no outline (stop_reason: ${stopReason})`);
+  }
+  return delivered;
+}
+
+// One streamed stroke object -> drawable strokes (a path with several M
+// commands becomes several strokes). Malformed strokes are dropped.
+export function toStrokes(json, paper) {
+  let raw;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const role = ["construction", "contour", "detail", "shading"].includes(raw.role) ? raw.role : "contour";
+  const weight = ["light", "medium", "bold"].includes(raw.weight) ? raw.weight : "medium";
+  return flattenPath(raw.d ?? "", paper).map((s) => ({ role, weight, ...s }));
 }
 
 // ---------- the turn ----------
@@ -150,18 +192,30 @@ let sharedClient;
 
 // utterances: what they said since the last action (oldest first).
 // current: { suggestion, history } for the outline on the page, or null.
-export async function decide({ client, imageBase64, mediaType, paper, utterances, current, signal }) {
+// emit receives, in order: { type: "action", action }, then for new/revise
+// { type: "stroke", stroke } per stroke, then { type: "done" }.
+export async function runTurn({ client, imageBase64, mediaType, paper, utterances, current, signal, emit }) {
   client ??= sharedClient ??= new Anthropic();
   const t0 = Date.now();
   const { action, note } = await classify({ client, utterances, current, signal });
   const ms = { filter: Date.now() - t0 };
-  if (action === "hide" || action === "ignore") return { action, note, suggestion: null, ms };
+  emit({ type: "action", action });
+  if (action === "hide" || action === "ignore") {
+    emit({ type: "done" });
+    return { action, note, ms };
+  }
 
   const t1 = Date.now();
-  const suggestion = await draw({ client, imageBase64, mediaType, paper, utterances, current, action, signal });
+  const count = await draw({
+    client, imageBase64, mediaType, paper, utterances, current, action, signal,
+    onStroke: (stroke) => {
+      ms.firstStroke ??= Date.now() - t1;
+      emit({ type: "stroke", stroke });
+    },
+  });
   ms.draw = Date.now() - t1;
-  if (!suggestion) return { action: "ignore", note: `${note} (no usable outline)`, suggestion: null, ms };
-  return { action, note, suggestion, ms };
+  emit({ type: "done" });
+  return { action, note: count ? note : `${note} (no usable outline)`, ms, strokes: count };
 }
 
 export class SuggestError extends Error {}
@@ -179,18 +233,4 @@ async function parse(client, params, signal) {
   }
 }
 
-// The model is good but not perfect at geometry: clamp to the page and drop
-// degenerate strokes. Returns null if nothing drawable is left.
-export function sanitize(suggestion, paper) {
-  const clampPt = ([x, y]) => [clamp(x, 0, paper.w), clamp(y, 0, paper.h)];
-  const strokes = suggestion.strokes
-    .map((st) => ({
-      ...st,
-      points: st.points.filter((p) => p.length >= 2 && p.every(Number.isFinite)).map(clampPt),
-    }))
-    .filter((st) => st.points.length >= 2);
-  return strokes.length ? { ...suggestion, strokes } : null;
-}
-
 const quote = (list) => list.map((u) => `- "${u}"`);
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));

@@ -47,8 +47,9 @@ const state = {
   errorUntil: 0,
 };
 
-// What the user said that the AI hasn't acted on yet, and the request in flight.
-const turn = { pending: [], inflight: null };
+// What the user said that the AI hasn't finished acting on, the request in
+// flight, and how to undo a half-drawn outline if that request is cancelled.
+const turn = { pending: [], inflight: null, rollback: null };
 
 // ---------- camera, tracking, render loop ----------
 
@@ -265,16 +266,21 @@ function heard(text) {
 // ---------- turns: what you said -> the AI's action ----------
 
 async function sendTurn() {
-  // You kept talking: the in-flight turn is out of date. Cancel it and send
-  // everything said since the last action together.
+  // You kept talking: the in-flight turn is out of date. Cancel it, put back
+  // any outline it had started drawing, and send everything said since the
+  // last completed turn together.
   turn.inflight?.abort();
   turn.inflight = null;
+  turn.rollback?.();
+  turn.rollback = null;
   if (!state.H) return; // sent from frame() once the page is back in view
 
   const utterances = turn.pending.slice();
   const { image, baseline } = capturePage();
   const controller = new AbortController();
   turn.inflight = controller;
+  let action = null;
+  let incoming = null;
   try {
     const res = await fetch("/api/turn", {
       method: "POST",
@@ -284,15 +290,36 @@ async function sendTurn() {
         image,
         paper: { w: state.layout.paperW, h: state.layout.paperH },
         utterances,
-        current: state.outline,
+        // Only the compact path data goes back; the server doesn't need points.
+        current: state.outline && {
+          history: state.outline.history,
+          suggestion: { strokes: state.outline.suggestion.strokes.map(({ role, weight, d }) => ({ role, weight, d })) },
+        },
       }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    turn.pending = turn.pending.slice(utterances.length);
-    apply(data, utterances, baseline);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    let done = false;
+    for await (const event of ndjson(res.body)) {
+      if (event.type === "error") throw new Error(event.error);
+      if (event.type === "action") {
+        action = event.action;
+        if (action === "hide") clearOutline();
+      } else if (event.type === "stroke") {
+        // First stroke: swap the new outline in and draw strokes as they come.
+        if (!incoming) incoming = beginOutline(action, utterances);
+        incoming.suggestion.strokes.push(event.stroke);
+      } else if (event.type === "done") {
+        done = true;
+        turn.pending = turn.pending.slice(utterances.length);
+        turn.rollback = null;
+        if (incoming) startTracking(incoming, baseline);
+      }
+    }
+    if (!done) throw new Error("connection closed early");
   } catch (err) {
-    if (err.name === "AbortError") return;
+    if (err.name === "AbortError") return; // superseded; rollback already done
+    turn.rollback?.();
+    turn.rollback = null;
     turn.pending = turn.pending.slice(utterances.length); // don't retry forever
     status(`Couldn't reach the AI: ${err.message}`, true);
   } finally {
@@ -300,23 +327,49 @@ async function sendTurn() {
   }
 }
 
-function apply({ action, suggestion }, utterances, baseline) {
-  if (action === "hide") return clearOutline();
-  if (action !== "new" && action !== "revise") return; // ignore: nothing happens
+// Newline-delimited JSON events from a streamed response body.
+async function* ndjson(body) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) yield JSON.parse(line);
+    }
+  }
+}
+
+// Show a new outline that is still arriving. Clearing is paused until it's
+// complete; if the turn is cancelled first, the previous outline comes back.
+function beginOutline(action, utterances) {
+  const previous = { outline: state.outline, tracker: state.tracker, trackState: state.trackState, fadeStart: state.fadeStart };
+  turn.rollback = () => {
+    Object.assign(state, previous);
+    $("hide").disabled = !state.outline;
+  };
   const history = action === "revise" && state.outline ? [...state.outline.history, ...utterances] : utterances;
-  state.outline = { suggestion, history };
+  const outline = { suggestion: { strokes: [] }, history };
+  Object.assign(state, { outline, tracker: null, trackState: null, fadeStart: 0 });
+  $("hide").disabled = false;
+  return outline;
+}
+
+function startTracking(outline, baseline) {
+  if (state.outline !== outline) return;
   state.tracker = new CompletionTracker({
     baseline,
     width: TRACK_W,
     height: trackH(),
     paperW: state.layout.paperW,
     paperH: state.layout.paperH,
-    strokes: suggestion.strokes,
+    strokes: outline.suggestion.strokes,
     now: performance.now(),
   });
-  state.trackState = null;
-  state.fadeStart = 0;
-  $("hide").disabled = false;
 }
 
 function clearOutline() {

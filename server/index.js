@@ -9,8 +9,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
-import { decide, SuggestError } from "./suggest.js";
-import { mockDecision } from "./mock.js";
+import { runTurn, SuggestError } from "./suggest.js";
+import { mockTurn } from "./mock.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, "..", "public");
@@ -38,7 +38,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 // One turn: { image, paper, utterances: [said since the last action],
-// current: { suggestion, history } | null } -> { action, note, suggestion }
+// current: { suggestion, history } | null }. The response is streamed as
+// newline-delimited JSON events so strokes reach the headset as they're drawn:
+//   {"type":"action","action":"new"|"revise"|"hide"|"ignore"}
+//   {"type":"stroke","stroke":{role, weight, d, closed, points}}   (new/revise)
+//   {"type":"done"}   or   {"type":"error","error":"..."}
 async function handleTurn(req, res) {
   let body;
   try {
@@ -51,30 +55,40 @@ async function handleTurn(req, res) {
   if (!match || !body.paper?.w || !body.paper?.h || !utterances.length) {
     return send(res, 400, { error: "Expected { image: dataURL, paper: {w, h}, utterances: [string], current? }" });
   }
-  const current = body.current?.suggestion
-    ? { suggestion: body.current.suggestion, history: (body.current.history ?? []).slice(-8).map((u) => String(u).slice(0, 500)) }
+  const current = Array.isArray(body.current?.suggestion?.strokes)
+    ? {
+        suggestion: { strokes: body.current.suggestion.strokes.slice(0, 80).map(({ role, weight, d }) => ({ role, weight, d: String(d ?? "").slice(0, 4000) })) },
+        history: (body.current.history ?? []).slice(-8).map((u) => String(u).slice(0, 500)),
+      }
     : null;
 
   // The client cancels a turn when the user keeps talking; stop paying for it.
   const abort = new AbortController();
   res.on("close", () => !res.writableEnded && abort.abort());
 
-  const args = { mediaType: match[1], imageBase64: match[2], paper: body.paper, utterances: utterances.slice(-6), current, signal: abort.signal };
+  res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+  const emit = (event) => !res.writableEnded && res.write(JSON.stringify(event) + "\n");
+  const args = { mediaType: match[1], imageBase64: match[2], paper: body.paper, utterances: utterances.slice(-6), current, signal: abort.signal, emit };
   const started = Date.now();
   try {
-    if (MOCK) await sleep(MOCK_DELAY_MS, abort.signal);
-    const result = MOCK ? mockDecision(args) : await decide(args);
-    const stages = result.ms ? ` [filter ${result.ms.filter}ms${result.ms.draw != null ? `, draw ${result.ms.draw}ms` : ""}]` : "";
+    const result = MOCK ? await mockTurn({ ...args, delayMs: MOCK_DELAY_MS }) : await runTurn(args);
+    const { filter, firstStroke, draw } = result.ms ?? {};
+    const stages = filter != null ? ` [filter ${filter}ms${draw != null ? `, first line ${firstStroke ?? "-"}ms, all ${draw}ms` : ""}]` : "";
     console.log(`${result.action.padEnd(6)} ${Date.now() - started}ms${stages} "${utterances.join(" / ")}" (${result.note})`);
-    send(res, 200, { action: result.action, suggestion: result.suggestion });
   } catch (err) {
-    if (err instanceof Anthropic.APIUserAbortError || abort.signal.aborted) return; // superseded by a newer turn
-    if (err instanceof SuggestError) return send(res, 422, { error: err.message });
-    if (err instanceof Anthropic.RateLimitError) return send(res, 429, { error: "Busy, try again in a moment" });
-    if (err instanceof Anthropic.AuthenticationError) return send(res, 500, { error: "Server has no valid Anthropic credentials" });
-    if (err instanceof Anthropic.APIError) return send(res, 502, { error: `Model error ${err.status}` });
-    throw err;
+    if (err instanceof Anthropic.APIUserAbortError || abort.signal.aborted) return res.end(); // superseded
+    let message;
+    if (err instanceof SuggestError) message = err.message;
+    else if (err instanceof Anthropic.RateLimitError) message = "Busy, try again in a moment";
+    else if (err instanceof Anthropic.AuthenticationError) message = "Server has no valid Anthropic credentials";
+    else if (err instanceof Anthropic.APIError) message = `Model error ${err.status}`;
+    else {
+      console.error(err);
+      message = "Internal error";
+    }
+    emit({ type: "error", error: message });
   }
+  res.end();
 }
 
 async function serveStatic(req, res) {
@@ -105,15 +119,6 @@ function readBody(req) {
     req.on("error", reject);
   });
 }
-
-const sleep = (ms, signal) =>
-  new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(t);
-      reject(signal.reason);
-    });
-  });
 
 function send(res, status, obj) {
   res.writeHead(status, { "content-type": "application/json" });

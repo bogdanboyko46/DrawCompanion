@@ -10,7 +10,8 @@ You draw on real paper wearing a lightweight headset: your phone in a head-mount
 |---|---|
 | Display | **Headset**: a phone in a lightweight viewer (video see-through using the phone's camera). The handheld phone view stays for setup and debugging. |
 | Outline generation | **Claude draws the strokes directly** from a photo of the page. No image-generation pipeline. |
-| Which AI | **Two stages.** Claude Haiku 5.5 (fast, cheap) hears every phrase and decides what it means. Claude Opus 5.5 is called only when there's something to draw or change. |
+| Which AI | **Two stages.** Claude Haiku 5.5 (fast, cheap) hears every phrase and decides what it means. Claude Sonnet 5.5 is called only when there's something to draw or change. |
+| Speed | **First lines within a few seconds.** Strokes are written as compact curves and streamed to the headset one at a time, so drawing starts before the whole outline is done. |
 | Where it goes | **Entirely the AI's call.** No box, no pointing: it reads the drawing and the request ("on the windowsill") and places the outline. |
 | Talking to it | **Always listening, never replying.** Every phrase goes to the AI, which decides: draw something new, change the current outline, clear it, or ignore the speech (thinking aloud, talking to someone else). |
 | Color | Not a focus. |
@@ -27,7 +28,8 @@ You draw on real paper wearing a lightweight headset: your phone in a head-mount
       │                                                            │
       │        server: 1. Haiku (text only) decides                │
       │                   new | revise | hide | ignore             │
-      │                2. new/revise only: Opus + photo → strokes  │
+      │                2. new/revise only: Sonnet + photo          │
+      │                   → strokes streamed one by one            │
       │                                                            │
       ├─ every frame: project strokes through H into both eyes ◄───┘
       │
@@ -57,7 +59,7 @@ Detection runs on a 960-pixel-wide copy of each frame. The pose is fit to every 
 
 - **Every phrase is a turn.** When the speech recognizer finishes a phrase, the app sends it with a fresh photo of the page and the outline currently shown (plus the requests that produced it). The server handles it in two stages:
   1. **Filter (Claude Haiku 5.5, text only).** Reads what was said and whether an outline is showing, and picks the action below. It doesn't see the photo, which keeps it quick and costs a fraction of a cent. Chatter, "clear it", and anything ignored stop here.
-  2. **Draw (Claude Opus 5.5, with the photo).** Runs only for new and revise, and returns the strokes.
+  2. **Draw (Claude Sonnet 5.5, with the photo).** Runs only for new and revise. Each stroke is sent to the headset the moment it's written (see Speed below).
 
   The actions:
 
@@ -72,6 +74,15 @@ Detection runs on a 960-pixel-wide copy of each frame. The pose is fit to every 
 - **Keep talking and it catches up.** If you say something while the previous phrase is still being processed, that request is cancelled (the server stops the model call, so you don't pay for it) and everything said since the last action is sent together. "Can you add…" followed by "…a flower next to the house" becomes one request.
 - **Placement is the AI's job.** It reads what's on the page, its perspective and scale, where the composition has room, and any place named in the request. The model reads positions off a labeled grid drawn on the image, which makes its coordinates much more accurate.
 - If the page isn't in view when you speak, the phrase waits and is sent as soon as the markers are seen again.
+
+### Speed
+
+The drawing model's response time is mostly the time spent writing the outline, so the outline is kept short and shown as it's written:
+
+- **Compact strokes.** Each stroke is SVG-style path data with curves ("M 120 340 C 150 300 200 300 230 340"), not a list of points. A simple flower is about a third the length it was as point lists, and the saving grows with curvier subjects. The server turns curves into lines for display.
+- **Streaming, in drawing order.** The server sends each stroke to the phone as soon as it's complete. Construction lines are written first, so the size and placement show up almost immediately and contours fill in after, while you're already starting to draw. Clearing is paused until the whole outline has arrived.
+- **Interruptions.** If you speak while an outline is still arriving, that request is cancelled and the previous outline comes back right away; then everything you said is sent together.
+- **Measuring.** The server logs each drawing turn as `[filter …ms, first line …ms, all …ms]`. The target is the first line within a few seconds of the end of the phrase.
 
 ### When the outline clears
 
@@ -96,8 +107,8 @@ Implemented in `public/completion.js`, and unit-tested:
 
 ## Roadmap
 
-1. **Now (this repo):** headset and phone views, printed-template tracking, always-on voice with a Haiku filter and Opus drawing, AI-decided placement, 3-second clearing.
-2. **Latency:** stream the drawing so construction lines appear first; measure whether the drawing stage can move to a faster model without hurting placement.
+1. **Now (this repo):** headset and phone views, printed-template tracking, always-on voice with a Haiku filter and streamed Sonnet drawing, AI-decided placement, 3-second clearing.
+2. **Latency:** measure real first-line times. If still slow: start the drawing call in parallel with the filter (cancelling it when the filter says ignore), or use Haiku for simple requests.
 3. **Comfort:** per-viewer lens correction and zoom calibration.
 4. **Polish:** a per-drawing style memory, so later suggestions match earlier ones.
 

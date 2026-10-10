@@ -32,16 +32,17 @@ A small dot low in each eye shows status: green listening, pulsing blue working,
 
 **Phone view:** tap *Start listening*, or type what you'd say and press Enter.
 
-**Which AI:** every phrase first goes to **Claude Haiku 5.5**, which decides whether it's a request (fast, text only, a fraction of a cent). Only requests to draw or change something go on to **Claude Opus 5.5**, which sees the page and draws the outline.
+**Which AI:** every phrase first goes to **Claude Haiku 5.5**, which decides whether it's a request (fast, text only, a fraction of a cent). Only requests to draw or change something go on to **Claude Sonnet 5.5**, which sees the page and draws the outline. Lines are streamed to the headset as they're written, so the first ones appear within a few seconds and the rest fill in.
 
-Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_FILTER_MODEL` (default `claude-haiku-5-5`), `DRAWCOMPANION_DRAW_MODEL` (default `claude-opus-5-5`), `DRAWCOMPANION_DRAW_EFFORT` (default `low`, tuned for response speed), `DRAWCOMPANION_MOCK_DELAY_MS` (mock mode only: simulated AI latency).
+Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_FILTER_MODEL` (default `claude-haiku-5-5`), `DRAWCOMPANION_DRAW_MODEL` (default `claude-sonnet-5-5`), `DRAWCOMPANION_DRAW_EFFORT` (default `low`, tuned for response speed), `DRAWCOMPANION_MOCK_DELAY_MS` (mock mode only: simulated AI latency).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `server/suggest.js` | The two AI stages: Haiku filter (new / revise / hide / ignore), then Opus drawing for new and revise |
-| `server/index.js` | Static file server and `POST /api/turn` (cancels the model call if a newer turn supersedes it) |
+| `server/suggest.js` | The two AI stages: Haiku filter (new / revise / hide / ignore), then streamed Sonnet drawing for new and revise |
+| `server/path.js` | Turns the model's compact curve paths into drawable lines; picks finished strokes out of the stream |
+| `server/index.js` | Static file server and `POST /api/turn`, streamed as newline-delimited events (cancels the model call if a newer turn supersedes it) |
 | `server/mock.js` | Canned decisions for trying the flow without API calls |
 | `public/app.js` | Camera, headset/phone views, always-on voice, turns, rendering |
 | `public/tracking.js` | Finds the template's markers every frame and computes the page pose |
@@ -57,4 +58,4 @@ Optional environment variables: `PORT` (default `8787`), `DRAWCOMPANION_FILTER_M
 npm test
 ```
 
-Covers the two-stage AI flow (against a fake API: chatter stops at Haiku, requests reach the drawing model with the photo), the homography math, page tracking from rendered templates (full view, mostly covered, downscaled, out of view), and the clearing rule: the 3-second countdown, restarts on new ink, waiting until tracing starts, hands, lighting changes and tracking jitter.
+Covers the two-stage AI flow (against a fake API: chatter stops at Haiku, requests stream strokes from Sonnet in order), the curve format and stream reader, the homography math, page tracking from rendered templates (full view, mostly covered, downscaled, out of view), and the clearing rule: the 3-second countdown, restarts on new ink, waiting until tracing starts, hands, lighting changes and tracking jitter.
