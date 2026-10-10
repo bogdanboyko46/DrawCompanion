@@ -1,0 +1,59 @@
+name: Checks
+
+on:
+  push:
+    branches: ["claude/**", "main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server:
+    name: Server tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  ios-build:
+    name: Build iOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Build for device (unsigned)
+        run: |
+          set +e
+          xcodebuild build \
+            -project ios/DrawCompanion3D.xcodeproj \
+            -target DrawCompanion3D \
+            -sdk iphoneos \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO > build.log 2>&1
+          status=$?
+          grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -150
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-build-log
+          path: build.log
+
+  scanner:
+    name: Scanner on test photos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile the app's PageScanner with the test harness
+        run: swiftc -O -o scanner ios/DrawCompanion3D/Capture/PageScanner.swift ios/ScannerTests/main.swift
+      - name: Run
+        run: ./scanner ios/ScannerTests/fixtures scanner-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scanner-output
+          path: scanner-out

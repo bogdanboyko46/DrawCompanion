@@ -1,7 +1,9 @@
-import ARKit
+// No ARKit or UIKit here: this file also builds on macOS for the scanner tests
+// (ios/ScannerTests). The ARFrame helper lives in ARFrame+ViewMapping.swift.
 import CoreImage
 import CoreImage.CIFilterBuiltins
-import RealityKit
+import Foundation
+import simd
 import Vision
 
 /// A sheet of paper found in a camera frame.
@@ -157,16 +159,5 @@ enum PageScanner {
         x = simd_normalize(simd_cross(y, z))
         let m = simd_float4x4(SIMD4(x, 0), SIMD4(y, 0), SIMD4(z, 0), SIMD4(center, 1))
         return (m, SIMD2(simd_length(top), simd_length(side)))
-    }
-}
-
-extension ARFrame {
-    /// Maps Vision-normalized image points (origin bottom-left) to view points.
-    func viewPointMapper(orientation: UIInterfaceOrientation, viewport: CGSize) -> (CGPoint) -> CGPoint {
-        let t = displayTransform(for: orientation, viewportSize: viewport)
-        return { p in
-            let n = CGPoint(x: p.x, y: 1 - p.y).applying(t)
-            return CGPoint(x: n.x * viewport.width, y: n.y * viewport.height)
-        }
     }
 }
