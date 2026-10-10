@@ -47,9 +47,36 @@ enum Prompts {
         "additionalProperties": false,
     ]
 
+    private static let box: [String: Any] = [
+        "type": "object",
+        "properties": ["x0": ["type": "number"], "y0": ["type": "number"], "x1": ["type": "number"], "y1": ["type": "number"]],
+        "required": ["x0", "y0", "x1", "y1"],
+        "additionalProperties": false,
+    ]
+
+    // Parts and placement come before the strokes: writing down where the
+    // existing lines are makes the model's placement far more accurate (in
+    // tests it stopped drawing new parts on top of existing ones).
     static let drawSchema: [String: Any] = [
         "type": "object",
         "properties": [
+            "parts": [
+                "type": "array",
+                "description": "First: each existing part of their drawing near where you will draw, with its bounding box in page coordinates read off the grid.",
+                "items": [
+                    "type": "object",
+                    "properties": ["name": ["type": "string"], "box": box],
+                    "required": ["name", "box"],
+                    "additionalProperties": false,
+                ],
+            ],
+            "place": [
+                "type": "object",
+                "description": "Then: where the new piece goes and why, checked against the parts so it doesn't land on existing lines unless they asked for that.",
+                "properties": ["reason": ["type": "string"], "box": box],
+                "required": ["reason", "box"],
+                "additionalProperties": false,
+            ],
             "strokes": [
                 "type": "array",
                 "items": [
@@ -71,7 +98,7 @@ enum Prompts {
                 ],
             ],
         ],
-        "required": ["strokes"],
+        "required": ["parts", "place", "strokes"],
         "additionalProperties": false,
     ]
 
@@ -88,8 +115,11 @@ enum Prompts {
         return lines.joined(separator: "\n")
     }
 
-    static func drawText(paper: PaperSize, utterances: [String], current: Outline?, action: TurnAction) -> String {
+    static func drawText(paper: PaperSize, utterances: [String], current: Outline?, action: TurnAction, region: PaperRect? = nil) -> String {
         var lines = ["Page size: \(Int(paper.w)) x \(Int(paper.h)) paper units."]
+        if let r = region {
+            lines.append("Image 1 is the whole page. Image 2 is a close-up of the region x \(Int(r.x))-\(Int(r.x + r.w)), y \(Int(r.y))-\(Int(r.y + r.h)), enlarged so you can see the drawing clearly. Grid labels in both are page coordinates; read positions from the close-up when drawing inside it.")
+        }
         if action == .revise, let current {
             let compact: [[String: String]] = current.strokes.map { ["role": $0.role.rawValue, "weight": $0.weight.rawValue, "d": $0.d] }
             let json = (try? JSONSerialization.data(withJSONObject: ["strokes": compact], options: [.sortedKeys]))

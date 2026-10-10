@@ -96,7 +96,7 @@ final class ClaudeClientTests: XCTestCase {
         let drawing = #"{"strokes":[{"role":"construction","weight":"light","d":"M 100 100 C 100 50 200 50 200 100 Z"},{"role":"contour","weight":"medium","d":"M 150 100 L 150 2000"}]}"#
         StubProtocol.replies = [(200, sse(drawing))]
         var strokes: [Stroke] = []
-        let count = try await client.draw(pageJPEG: Data([0xFF, 0xD8]), paper: paper, utterances: ["add a flower"],
+        let count = try await client.draw(page: PagePhotos(full: Data([0xFF, 0xD8])), paper: paper, utterances: ["add a flower"],
                                           current: nil, action: .new) { strokes.append($0) }
         XCTAssertEqual(count, 2)
         XCTAssertEqual(strokes.map(\.role), [.construction, .contour])
@@ -114,7 +114,7 @@ final class ClaudeClientTests: XCTestCase {
         StubProtocol.replies = [(200, sse(#"{"strokes":[{"role":"contour","weight":"medium","d":"M 1 1 L 9 9"}]}"#))]
         let current = Outline(strokes: [Stroke(role: .contour, weight: .medium, d: "M 1 1 L 9 9", closed: false, points: [])],
                               history: ["add a flower"])
-        _ = try await client.draw(pageJPEG: Data([0xFF]), paper: paper, utterances: ["bigger"], current: current, action: .revise) { _ in }
+        _ = try await client.draw(page: PagePhotos(full: Data([0xFF])), paper: paper, utterances: ["bigger"], current: current, action: .revise) { _ in }
         let content = (StubProtocol.bodies[0]["messages"] as? [[String: Any]])?.first?["content"] as? [[String: Any]]
         let text = content?.last?["text"] as? String ?? ""
         XCTAssertTrue(text.contains("Outline currently shown"))
@@ -144,7 +144,7 @@ final class MockBackendTests: XCTestCase {
 
     func testMockStreamsAFlower() async throws {
         var events: [TurnEvent] = []
-        try await MockBackend(delay: 0.01).run(utterances: ["draw a flower"], current: nil, pageJPEG: Data(),
+        try await MockBackend(delay: 0.01).run(utterances: ["draw a flower"], current: nil, page: PagePhotos(full: Data()),
                                               paper: PaperSize(w: 1000, h: 1458)) { events.append($0) }
         XCTAssertEqual(events.first, .action(.new))
         XCTAssertEqual(events.last, .done)

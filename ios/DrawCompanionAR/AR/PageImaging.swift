@@ -25,35 +25,56 @@ enum PageImaging {
                                                      y: CGFloat(height) / out.extent.height))
     }
 
-    /// The image sent to the model: the page with a faint labeled grid in
-    /// paper units, which makes its coordinates much more accurate.
-    static func uploadJPEG(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], paper: PaperSize, width: Int = 768) -> Data? {
-        let height = Int((Double(width) * paper.h / paper.w).rounded())
-        guard let raw = rgba(pixelBuffer, corners: corners, width: width, height: height),
-              let cg = cgImage(rgba: PageEnhance.enhanced(rgba: raw, width: width, height: height), width: width, height: height)
+    /// Everything the AI needs from one camera frame: the whole page, an
+    /// enlarged close-up of the drawing when it's small, and the ink style.
+    /// The page is rectified once at high resolution and cut from there.
+    static func photos(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], paper: PaperSize) -> (PagePhotos, InkStyle)? {
+        let hiW = 1600
+        let hiH = Int((Double(hiW) * paper.h / paper.w).rounded())
+        guard let raw = rgba(pixelBuffer, corners: corners, width: hiW, height: hiH) else { return nil }
+        // Ink style from the raw camera colors so the outline matches what's on screen.
+        let style = InkStyle.estimate(rgba: raw, width: hiW, height: hiH, paperWidth: paper.w)
+        let region = PageRegion.focus(rgba: raw, width: hiW, height: hiH, paper: paper)
+        guard let page = cgImage(rgba: PageEnhance.enhanced(rgba: raw, width: hiW, height: hiH), width: hiW, height: hiH),
+              let full = gridded(page, from: PaperRect(x: 0, y: 0, w: paper.w, h: paper.h), paper: paper, width: 768, step: 100)
         else { return nil }
+        let closeUp = region.flatMap { gridded(page, from: $0, paper: paper, width: 900, step: 50) }
+        return (PagePhotos(full: full, closeUp: closeUp, region: closeUp == nil ? nil : region), style)
+    }
+
+    /// Part of the page, scaled to `width` pixels, with a faint grid labeled in
+    /// page coordinates every `step` units, which makes the model's coordinates
+    /// much more accurate.
+    private static func gridded(_ page: CGImage, from r: PaperRect, paper: PaperSize, width: Int, step: Int) -> Data? {
+        let k = Double(page.width) / paper.w // page pixels per unit
+        guard let crop = page.cropping(to: CGRect(x: r.x * k, y: r.y * k, width: r.w * k, height: r.h * k)) else { return nil }
+        let height = Int((Double(width) * r.h / r.w).rounded())
         let size = CGSize(width: width, height: height)
+        let px = Double(width) / r.w // output pixels per unit
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-            UIImage(cgImage: cg).draw(in: CGRect(origin: .zero, size: size))
-            let px = CGFloat(width) / CGFloat(paper.w)
+            UIImage(cgImage: crop).draw(in: CGRect(origin: .zero, size: size))
             let g = ctx.cgContext
-            g.setStrokeColor(UIColor(red: 0, green: 0.59, blue: 1, alpha: 0.25).cgColor)
+            g.setStrokeColor(UIColor(red: 0, green: 0.59, blue: 1, alpha: 0.3).cgColor)
             g.setLineWidth(1)
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 11),
-                .foregroundColor: UIColor(red: 0, green: 0.47, blue: 0.86, alpha: 0.8),
+                .font: UIFont.systemFont(ofSize: 12),
+                .foregroundColor: UIColor(red: 0, green: 0.47, blue: 0.86, alpha: 0.85),
             ]
-            for u in stride(from: 100, to: Int(paper.w), by: 100) {
-                let x = CGFloat(u) * px
+            var u = (Int(r.x) / step + 1) * step
+            while Double(u) < r.x + r.w {
+                let x = (Double(u) - r.x) * px
                 g.move(to: CGPoint(x: x, y: 0)); g.addLine(to: CGPoint(x: x, y: size.height)); g.strokePath()
                 ("\(u)" as NSString).draw(at: CGPoint(x: x + 2, y: 1), withAttributes: attrs)
+                u += step
             }
-            for v in stride(from: 100, to: Int(paper.h), by: 100) {
-                let y = CGFloat(v) * px
+            var v = (Int(r.y) / step + 1) * step
+            while Double(v) < r.y + r.h {
+                let y = (Double(v) - r.y) * px
                 g.move(to: CGPoint(x: 0, y: y)); g.addLine(to: CGPoint(x: size.width, y: y)); g.strokePath()
-                ("\(v)" as NSString).draw(at: CGPoint(x: 2, y: y - 13), withAttributes: attrs)
+                ("\(v)" as NSString).draw(at: CGPoint(x: 2, y: y - 15), withAttributes: attrs)
+                v += step
             }
         }
         return image.jpegData(compressionQuality: 0.85)

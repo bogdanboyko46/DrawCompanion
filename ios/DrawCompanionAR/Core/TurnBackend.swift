@@ -3,7 +3,7 @@ import Foundation
 /// Runs one spoken turn: decides the action, then (for new/revise) delivers
 /// strokes one at a time. Events arrive in order: .action, .stroke…, .done.
 protocol TurnBackend {
-    func run(utterances: [String], current: Outline?, pageJPEG: Data, paper: PaperSize,
+    func run(utterances: [String], current: Outline?, page: PagePhotos, paper: PaperSize,
              emit: @escaping (TurnEvent) async -> Void) async throws
 }
 
@@ -11,13 +11,13 @@ protocol TurnBackend {
 struct ClaudeBackend: TurnBackend {
     let client: ClaudeClient
 
-    func run(utterances: [String], current: Outline?, pageJPEG: Data, paper: PaperSize,
+    func run(utterances: [String], current: Outline?, page: PagePhotos, paper: PaperSize,
              emit: @escaping (TurnEvent) async -> Void) async throws {
         let (action, note) = try await client.classify(utterances: utterances, current: current)
         print("[DC] filter: \(action.rawValue) (\(note)) for \(utterances)")
         await emit(.action(action))
         if action == .new || action == .revise {
-            let n = try await client.draw(pageJPEG: pageJPEG, paper: paper, utterances: utterances,
+            let n = try await client.draw(page: page, paper: paper, utterances: utterances,
                                       current: current, action: action) { await emit(.stroke($0)) }
             print("[DC] draw: \(n) strokes")
         }
@@ -30,7 +30,7 @@ struct ClaudeBackend: TurnBackend {
 struct MockBackend: TurnBackend {
     var delay: Double = 1.5 // seconds, split between "thinking" and strokes
 
-    func run(utterances: [String], current: Outline?, pageJPEG: Data, paper: PaperSize,
+    func run(utterances: [String], current: Outline?, page: PagePhotos, paper: PaperSize,
              emit: @escaping (TurnEvent) async -> Void) async throws {
         let said = utterances.joined(separator: " ").lowercased()
         try await Task.sleep(nanoseconds: UInt64(delay * 0.3 * 1e9))

@@ -109,7 +109,7 @@ final class AppModel: ObservableObject {
 
         let trackH = trackHeight
         guard let frame = ar.session.currentFrame, let corners = ar.imageCorners(in: frame),
-              let jpeg = PageImaging.uploadJPEG(frame.capturedImage, corners: corners, paper: ar.paper),
+              let (photos, style) = PageImaging.photos(frame.capturedImage, corners: corners, paper: ar.paper),
               let baseline = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.trackWidth, height: trackH)
         else {
             print("[DC] page not ready, waiting")
@@ -118,12 +118,10 @@ final class AppModel: ObservableObject {
         }
         waitingForPage = false
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            try? jpeg.write(to: dir.appendingPathComponent("last-page.jpg"))
-            print("[DC] page jpeg \(jpeg.count) bytes, paper \(ar.paper), corners \(corners), image \(frame.camera.imageResolution)")
+            try? photos.full.write(to: dir.appendingPathComponent("last-page.jpg"))
+            try? photos.closeUp?.write(to: dir.appendingPathComponent("last-closeup.jpg"))
+            print("[DC] page \(photos.full.count) B, close-up \(photos.closeUp?.count ?? 0) B of \(String(describing: photos.region)), paper \(ar.paper), ink \(style)")
         }
-
-        let style = PageImaging.inkStyle(frame.capturedImage, corners: corners, paper: ar.paper)
-        print("[DC] ink style \(style)")
         let utterances = pending
         let current = outline
         let paper = ar.paper
@@ -133,7 +131,7 @@ final class AppModel: ObservableObject {
         working = true
         inflight = Task { [weak self] in
             do {
-                try await backend.run(utterances: utterances, current: current, pageJPEG: jpeg, paper: paper) { event in
+                try await backend.run(utterances: utterances, current: current, page: photos, paper: paper) { event in
                     self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style)
                 }
             } catch {

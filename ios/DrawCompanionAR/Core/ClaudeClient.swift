@@ -70,7 +70,7 @@ final class ClaudeClient {
 
     /// Streams the drawing; calls onStroke for each stroke as it completes.
     /// Returns how many strokes were delivered.
-    func draw(pageJPEG: Data, paper: PaperSize, utterances: [String], current: Outline?, action: TurnAction,
+    func draw(page: PagePhotos, paper: PaperSize, utterances: [String], current: Outline?, action: TurnAction,
               onStroke: (Stroke) async -> Void) async throws -> Int {
         let body: [String: Any] = [
             "model": config.drawModel,
@@ -81,9 +81,8 @@ final class ClaudeClient {
             "system": Prompts.drawSystem,
             "messages": [[
                 "role": "user",
-                "content": [
-                    ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": pageJPEG.base64EncodedString()]],
-                    ["type": "text", "text": Prompts.drawText(paper: paper, utterances: utterances, current: current, action: action)],
+                "content": Self.images(page) + [
+                    ["type": "text", "text": Prompts.drawText(paper: paper, utterances: utterances, current: current, action: action, region: page.region)],
                 ],
             ]],
         ]
@@ -132,6 +131,12 @@ final class ClaudeClient {
     }
 
     // MARK: helpers
+
+    private static func images(_ page: PagePhotos) -> [[String: Any]] {
+        [page.full, page.closeUp].compactMap { $0 }.map {
+            ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": $0.base64EncodedString()]]
+        }
+    }
 
     private func request(_ body: [String: Any], beta: String?) throws -> URLRequest {
         var req = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))

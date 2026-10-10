@@ -55,3 +55,34 @@ final class PageEnhanceTests: XCTestCase {
         XCTAssertGreaterThan(paperR - pencil, 180 - 110, "pencil stands out more than before")
     }
 }
+
+final class PageRegionTests: XCTestCase {
+    func page(w: Int, h: Int, ink: [(Int, Int)]) -> [UInt8] {
+        var px = [UInt8](repeating: 230, count: w * h * 4)
+        for (x, y) in ink {
+            let i = (y * w + x) * 4
+            px[i] = 70; px[i + 1] = 70; px[i + 2] = 70
+        }
+        return px
+    }
+
+    func testFindsASmallDrawingWithMargin() {
+        // 1000 x 500 units at 2 units per pixel; ink square at units 400-500, 100-200.
+        var ink: [(Int, Int)] = []
+        for x in 200...250 { ink.append((x, 50)); ink.append((x, 100)) }
+        for y in 50...100 { ink.append((200, y)); ink.append((250, y)) }
+        let r = PageRegion.focus(rgba: page(w: 500, h: 250, ink: ink), width: 500, height: 250, paper: PaperSize(w: 1000, h: 500))
+        let box = try! XCTUnwrap(r)
+        XCTAssertLessThan(box.x, 400); XCTAssertGreaterThan(box.x + box.w, 500)
+        XCTAssertLessThan(box.y, 100); XCTAssertGreaterThan(box.y + box.h, 200)
+        XCTAssertGreaterThanOrEqual(box.w, 300)
+        XCTAssertGreaterThanOrEqual(box.x, 0); XCTAssertLessThanOrEqual(box.x + box.w, 1000)
+    }
+
+    func testBlankPageAndFullPageDrawingNeedNoCloseUp() {
+        XCTAssertNil(PageRegion.focus(rgba: page(w: 200, h: 100, ink: []), width: 200, height: 100, paper: PaperSize(w: 1000, h: 500)))
+        var ink: [(Int, Int)] = []
+        for x in 10..<190 { ink.append((x, 10)); ink.append((x, 89)) }
+        XCTAssertNil(PageRegion.focus(rgba: page(w: 200, h: 100, ink: ink), width: 200, height: 100, paper: PaperSize(w: 1000, h: 500)))
+    }
+}
