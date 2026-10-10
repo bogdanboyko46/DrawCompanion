@@ -9,6 +9,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     struct Scene {
         var headset: Bool
         var strokes: [Stroke]
+        var style: InkStyle
         var progress: [CompletionTracker.StrokeState]?
         var fade: Float // 1 = fully visible, 0 = gone
     }
@@ -16,7 +17,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Fraction of the camera image's height each eye shows in the headset.
     static let headsetZoom: CGFloat = 1.6
 
-    var scene: () -> Scene = { Scene(headset: false, strokes: [], progress: nil, fade: 1) }
+    var scene: () -> Scene = { Scene(headset: false, strokes: [], style: .fallback, progress: nil, fade: 1) }
 
     private let session: ARSession
     private let controller: ARController
@@ -82,6 +83,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         let projected: [[CGPoint?]] = scene.strokes.map { stroke in
             stroke.points.map { p in controller.world(p).flatMap { ARController.project($0, camera: frame.camera) } }
         }
+        // Image pixels per paper unit near each stroke, so line widths are real
+        // thicknesses on the paper and stay right as you move closer or farther.
+        let scale: [Float] = scene.strokes.map { stroke in
+            guard let p = stroke.points.first,
+                  let a = controller.world(p).flatMap({ ARController.project($0, camera: frame.camera) }),
+                  let b = controller.world(PaperPoint(x: p.x + 20, y: p.y)).flatMap({ ARController.project($0, camera: frame.camera) })
+            else { return 1 }
+            return Float(hypot(b.x - a.x, b.y - a.y)) / 20
+        }
 
         for vp in viewports(drawable: view.drawableSize, image: image, headset: scene.headset) {
             encoder.setViewport(MTLViewport(originX: Double(vp.rect.minX), originY: Double(vp.rect.minY),
@@ -95,7 +105,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setFragmentTexture(CVMetalTextureGetTexture(cbcr), index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
 
-            let vertices = outlineVertices(scene, projected, image: image, viewport: vp)
+            let vertices = outlineVertices(scene, projected, scale, image: image, viewport: vp)
             if !vertices.isEmpty, let buffer = device.makeBuffer(bytes: vertices, length: MemoryLayout<LineVertex>.stride * vertices.count, options: []) {
                 encoder.setRenderPipelineState(linePipeline)
                 encoder.setVertexBuffer(buffer, offset: 0, index: 0)
@@ -135,19 +145,21 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     // MARK: outline geometry
 
-    private static let roleStyle: [StrokeRole: (width: Float, dash: [Float], alpha: Float)] = [
-        .construction: (1.5, [6, 5], 0.6),
-        .contour: (3, [], 1),
-        .detail: (2, [], 0.9),
-        .shading: (1.5, [2, 4], 0.7),
+    /// Per role: thickness relative to the drawing's own lines, opacity, and
+    /// dash pattern (in multiples of the line width).
+    private static let roleStyle: [StrokeRole: (width: Float, alpha: Float, dash: [Float])] = [
+        .construction: (0.6, 0.35, [4, 3]),
+        .contour: (1, 0.85, []),
+        .detail: (0.75, 0.75, []),
+        .shading: (0.5, 0.45, [1, 2]),
     ]
-    private static let weightScale: [StrokeWeight: Float] = [.light: 0.75, .medium: 1, .bold: 1.4]
-    private static let ink = SIMD3<Float>(0.1, 0.76, 1) // bright cyan reads on paper and on pencil
+    private static let weightScale: [StrokeWeight: Float] = [.light: 0.8, .medium: 1, .bold: 1.3]
 
-    private func outlineVertices(_ scene: Scene, _ projected: [[CGPoint?]], image: CGSize, viewport vp: Viewport) -> [LineVertex] {
+    private func outlineVertices(_ scene: Scene, _ projected: [[CGPoint?]], _ scale: [Float], image: CGSize,
+                                 viewport vp: Viewport) -> [LineVertex] {
         guard scene.fade > 0 else { return [] }
-        let unit = Float(vp.rect.height) / 360 // line widths scale with the view
         // Camera-image pixel -> viewport pixel.
+        let zoom = Float(vp.rect.width / (vp.crop.width * image.width))
         func toView(_ p: CGPoint) -> SIMD2<Float> {
             SIMD2(Float((p.x / image.width - vp.crop.minX) / vp.crop.width * vp.rect.width),
                   Float((p.y / image.height - vp.crop.minY) / vp.crop.height * vp.rect.height))
@@ -156,22 +168,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         func clip(_ p: SIMD2<Float>) -> SIMD2<Float> {
             SIMD2(p.x / Float(vp.rect.width) * 2 - 1, 1 - p.y / Float(vp.rect.height) * 2)
         }
+        // The drawing's own ink color, as the camera sees it.
+        let ink = SIMD3(scene.style.red, scene.style.green, scene.style.blue)
 
         var out: [LineVertex] = []
         for (i, stroke) in scene.strokes.enumerated() {
-            let style = Self.roleStyle[stroke.role] ?? (3, [], 1)
+            let role = Self.roleStyle[stroke.role] ?? (1, 0.85, [])
             let progress = scene.progress.flatMap { i < $0.count ? $0[i] : nil }
             // Traced strokes step back so the untraced ones stand out.
             let traced: Float = progress.map { $0.done ? 0.3 : 1 - 0.5 * Float($0.progress) } ?? 1
-            let alpha = style.alpha * traced * scene.fade
-            let width = style.width * (Self.weightScale[stroke.weight] ?? 1) * unit
+            let alpha = role.alpha * traced * scene.fade
+            let paperWidth = Float(scene.style.width) * role.width * (Self.weightScale[stroke.weight] ?? 1)
+            let width = max(1.5, paperWidth * scale[i] * zoom) // at least a visible hairline
             var pts = projected[i].compactMap { $0.map(toView) }
             if stroke.closed, let first = pts.first { pts.append(first) }
             guard pts.count >= 2 else { continue }
-            let pieces = dashed(pts, pattern: style.dash.map { $0 * unit })
-            // Dark halo first so the line reads on both light paper and dark ink.
-            for piece in pieces { addPolyline(piece, width: width + 2.5 * unit, color: SIMD4(0, 0, 0, alpha * 0.55), clip: clip, into: &out) }
-            for piece in pieces { addPolyline(piece, width: width, color: SIMD4(Self.ink, alpha), clip: clip, into: &out) }
+            for piece in dashed(pts, pattern: role.dash.map { $0 * max(width, 3) }) {
+                addPolyline(piece, width: width, color: SIMD4(ink, alpha), clip: clip, into: &out)
+            }
         }
         return out
     }

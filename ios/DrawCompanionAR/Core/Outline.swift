@@ -50,6 +50,8 @@ struct Stroke: Equatable {
 struct Outline: Equatable {
     var strokes: [Stroke]
     var history: [String]
+    /// The look of the user's drawing, so the outline can match it.
+    var style: InkStyle = .fallback
 }
 
 /// What the AI decided to do with what the user said.

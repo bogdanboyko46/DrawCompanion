@@ -53,6 +53,7 @@ final class ClaudeClient {
         }
         // Haiku has no server-side fallback; a declined phrase is simply not acted on.
         if json["stop_reason"] as? String == "refusal" { return (.ignore, "filter: refusal") }
+        print("[DC] filter raw: \(String(data: data.prefix(800), encoding: .utf8) ?? "?")")
         guard let text = Self.firstText(json),
               let decision = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
               let action = (decision["action"] as? String).flatMap(TurnAction.init)
@@ -95,6 +96,7 @@ final class ClaudeClient {
 
         var scanner = StrokeScanner()
         var delivered = 0
+        var raw = ""
         var stopReason: String?
         for try await line in bytes.lines {
             guard let event = SSE.event(fromLine: line) else { continue }
@@ -106,6 +108,7 @@ final class ClaudeClient {
             case "content_block_delta":
                 guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                       let text = delta["text"] as? String else { continue }
+                raw += text
                 for json in scanner.push(text) {
                     for stroke in PathFlattener.strokes(fromJSON: json, paper: paper) {
                         await onStroke(stroke)
@@ -121,6 +124,7 @@ final class ClaudeClient {
                 break
             }
         }
+        print("[DC] draw stop=\(stopReason ?? "nil") delivered=\(delivered) raw: \(raw.prefix(600))")
         if delivered == 0, stopReason != "refusal", stopReason != "end_turn" {
             throw Failure.malformed("no outline (stop_reason: \(stopReason ?? "none"))")
         }

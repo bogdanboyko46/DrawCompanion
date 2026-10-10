@@ -2,10 +2,15 @@ import ARKit
 import Vision
 
 /// Owns the AR session and finds the paper. Vision spots the sheet in the
-/// camera image a couple of times a second; each corner is raycast onto the
-/// desk so the page gets a fixed place in the room. ARKit's world tracking
-/// then keeps it there as your head moves, even when your hand hides the
-/// page, and fresh detections follow the paper if it's moved or turned.
+/// camera image a couple of times a second; its corners are raycast onto the
+/// desk and fitted as one rigid rectangle, which gets a fixed place in the
+/// room. ARKit's world tracking keeps it there as your head moves, even when
+/// your hand hides the page.
+///
+/// Vision's corners wobble by a centimeter or more from one detection to the
+/// next, so detections don't steer the page directly: small differences are
+/// treated as noise, and the page only moves when several detections in a
+/// row agree it really moved (the paper was slid or turned).
 final class ARController: NSObject, ARSessionDelegate {
     let session = ARSession()
 
@@ -23,9 +28,21 @@ final class ARController: NSObject, ARSessionDelegate {
     private var lastDetectStart: TimeInterval = 0
     private let detectInterval: TimeInterval = 0.4
 
+    /// A detection that disagrees with the pinned page, waiting for agreement.
+    private var candidate: [SIMD3<Float>]?
+    private var candidateVotes = 0
+    private static let noise: Float = 0.015 // m: closer than this to the pinned page is detection jitter
+    private static let agree: Float = 0.012 // m: candidates this close count as the same new placement
+    private static let votesToMove = 3 // ≈1.2 s of agreeing detections
+    private static let votesToStart = 2
+
     func start() {
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
+        // LiDAR phones map the desk surface quickly; raycasts then hit real geometry.
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
+            config.sceneReconstruction = .mesh
+        }
         // The sharpest 4:3 format: the page photo sent to the AI comes from this image.
         if let format = ARWorldTrackingConfiguration.supportedVideoFormats
             .filter({ abs($0.imageResolution.width / $0.imageResolution.height - 4.0 / 3.0) < 0.01 })
@@ -67,6 +84,10 @@ final class ARController: NSObject, ARSessionDelegate {
               let obs = request.results?.first, obs.confidence > 0.6 else { return nil }
         // Vision's origin is bottom-left; flip to top-left.
         let pts = [obs.topLeft, obs.topRight, obs.bottomRight, obs.bottomLeft].map { CGPoint(x: $0.x, y: 1 - $0.y) }
+        // A corner on the image border means the page is cut off: its "corner" is
+        // really the edge of the view, and the page would come out the wrong shape.
+        let margin = 0.015
+        guard pts.allSatisfy({ $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }) else { return nil }
         let tl = pts.min { $0.x + $0.y < $1.x + $1.y }!
         let br = pts.max { $0.x + $0.y < $1.x + $1.y }!
         let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
@@ -76,34 +97,94 @@ final class ARController: NSObject, ARSessionDelegate {
     }
 
     private func place(_ imageCorners: [CGPoint], using frame: ARFrame) {
-        let world = imageCorners.compactMap { point -> SIMD3<Float>? in
-            let query = frame.raycastQuery(from: point, allowing: .estimatedPlane, alignment: .any)
-            guard let hit = session.raycast(query).first else { return nil }
-            let t = hit.worldTransform.columns.3
-            return SIMD3(t.x, t.y, t.z)
-        }
-        guard world.count == 4 else { return }
-        let width = (simd_distance(world[0], world[1]) + simd_distance(world[3], world[2])) / 2
-        let height = (simd_distance(world[0], world[3]) + simd_distance(world[1], world[2])) / 2
-        guard (0.05...1.2).contains(width), (0.05...1.2).contains(height) else { return }
-
-        var next = world
+        let hits = imageCorners.compactMap { raycast($0, frame) }
+        guard hits.count == 4, var next = Self.fitRectangle(hits) else { return }
         if let old = corners {
             // Keep corner identity (which edge is "top") when the paper moves or turns.
-            let rotations = (0..<4).map { k in (0..<4).map { next[($0 + k) % 4] } }
-            let cost = { (c: [SIMD3<Float>]) in zip(c, old).reduce(Float(0)) { $0 + simd_distance($1.0, $1.1) } }
-            let best = rotations.min { cost($0) < cost($1) }!
-            if cost(best) < 0.6 { next = best }
-            // Small changes are detection jitter: ease toward them. Big ones are a moved page.
-            next = zip(next, old).map { new, prev in simd_distance(new, prev) < 0.01 ? prev + (new - prev) * 0.25 : new }
+            next = (0..<4).map { k in (0..<4).map { next[($0 + k) % 4] } }.min { Self.spread($0, old) < Self.spread($1, old) }!
         }
-        corners = next
         lastSeen = frame.timestamp
+
+        guard let current = corners else {
+            // First sighting: wait for a second detection to agree before showing anything.
+            if let agreed = vote(next, needed: Self.votesToStart) { pin(agreed) }
+            return
+        }
+        if Self.spread(next, current) < Self.noise {
+            candidate = nil
+            candidateVotes = 0
+            // While an outline is shown, hold perfectly still. Otherwise refine slowly.
+            if !lockPaperSize { pin(zip(current, next).map { $0 + ($1 - $0) * 0.15 }) }
+            return
+        }
+        if let agreed = vote(next, needed: Self.votesToMove) { pin(agreed) } // the paper really moved
+    }
+
+    /// Counts agreeing detections; returns their average once there are enough.
+    private func vote(_ next: [SIMD3<Float>], needed: Int) -> [SIMD3<Float>]? {
+        if let c = candidate, Self.spread(next, c) < Self.agree {
+            candidate = zip(c, next).map { $0 + ($1 - $0) * 0.5 }
+            candidateVotes += 1
+        } else {
+            candidate = next
+            candidateVotes = 1
+        }
+        return candidateVotes >= needed ? candidate : nil
+    }
+
+    private func pin(_ next: [SIMD3<Float>]) {
+        corners = next
+        candidate = nil
+        candidateVotes = 0
         if !lockPaperSize {
-            let w = (simd_distance(next[0], next[1]) + simd_distance(next[3], next[2])) / 2
-            let h = (simd_distance(next[0], next[3]) + simd_distance(next[1], next[2])) / 2
+            let w = simd_distance(next[0], next[1])
+            let h = simd_distance(next[0], next[3])
             paper = PaperSize(aspect: Double(h / w))
         }
+    }
+
+    /// Prefer the desk surface ARKit has already mapped; fall back to an estimate.
+    private func raycast(_ point: CGPoint, _ frame: ARFrame) -> SIMD3<Float>? {
+        for target in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
+            let query = frame.raycastQuery(from: point, allowing: target, alignment: .any)
+            if let hit = session.raycast(query).first {
+                let t = hit.worldTransform.columns.3
+                return SIMD3(t.x, t.y, t.z)
+            }
+        }
+        return nil
+    }
+
+    /// Largest distance between matching corners.
+    static func spread(_ a: [SIMD3<Float>], _ b: [SIMD3<Float>]) -> Float {
+        zip(a, b).map { simd_distance($0, $1) }.max() ?? .infinity
+    }
+
+    /// Standard sheets (width × height, meters), either orientation.
+    private static let sheets: [SIMD2<Float>] = [
+        SIMD2(0.2159, 0.2794), SIMD2(0.2794, 0.2159), // US Letter
+        SIMD2(0.210, 0.297), SIMD2(0.297, 0.210), // A4
+        SIMD2(0.148, 0.210), SIMD2(0.210, 0.148), // A5
+    ]
+
+    /// Fits a flat, square-cornered rectangle to four noisy corner hits
+    /// (TL, TR, BR, BL), snapping to a standard sheet size when it's close.
+    static func fitRectangle(_ p: [SIMD3<Float>]) -> [SIMD3<Float>]? {
+        let center = (p[0] + p[1] + p[2] + p[3]) / 4
+        let across = (p[1] - p[0]) + (p[2] - p[3])
+        let down = (p[3] - p[0]) + (p[2] - p[1])
+        guard simd_length(across) > 0.01, simd_length(down) > 0.01 else { return nil }
+        let ex = simd_normalize(across)
+        let normal = simd_normalize(simd_cross(ex, down))
+        var ey = simd_normalize(simd_cross(normal, ex))
+        if simd_dot(ey, down) < 0 { ey = -ey }
+        var size = SIMD2(simd_length(across) / 2, simd_length(down) / 2)
+        guard (0.05...1.2).contains(size.x), (0.05...1.2).contains(size.y) else { return nil }
+        if let sheet = sheets.first(where: { abs($0.x / size.x - 1) < 0.15 && abs($0.y / size.y - 1) < 0.15 }) {
+            size = sheet
+        }
+        let hx = ex * size.x / 2, hy = ey * size.y / 2
+        return [center - hx - hy, center + hx - hy, center + hx + hy, center - hx + hy]
     }
 
     // MARK: paper <-> camera

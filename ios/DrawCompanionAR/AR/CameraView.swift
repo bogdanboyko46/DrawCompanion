@@ -20,7 +20,7 @@ struct CameraView: UIViewRepresentable {
         let model = self.model
         let renderer = Renderer(view: view, session: model.ar.session, controller: model.ar)
         renderer?.scene = { [weak model] in
-            MainActor.assumeIsolated { model?.scene() } ?? Renderer.Scene(headset: false, strokes: [], progress: nil, fade: 1)
+            MainActor.assumeIsolated { model?.scene() } ?? Renderer.Scene(headset: false, strokes: [], style: .fallback, progress: nil, fade: 1)
         }
         view.delegate = renderer
         context.coordinator.renderer = renderer

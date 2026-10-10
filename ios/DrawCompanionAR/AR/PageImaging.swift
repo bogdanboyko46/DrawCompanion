@@ -59,6 +59,23 @@ enum PageImaging {
         return image.jpegData(compressionQuality: 0.85)
     }
 
+    /// How the drawing on the page looks (ink color and line thickness).
+    static func inkStyle(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], paper: PaperSize, width: Int = 480) -> InkStyle {
+        let height = Int((Double(width) * paper.h / paper.w).rounded())
+        guard let page = rectified(pixelBuffer, corners: corners, width: width, height: height),
+              let cg = context.createCGImage(page, from: CGRect(x: 0, y: 0, width: width, height: height))
+        else { return .fallback }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let ok = bytes.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return ok ? InkStyle.estimate(rgba: bytes, width: width, height: height, paperWidth: paper.w) : .fallback
+    }
+
     /// Small grayscale top-down page (0–255, row 0 = top of the page) for
     /// completion tracking.
     static func gray(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], width: Int, height: Int) -> [Float]? {

@@ -13,11 +13,13 @@ struct ClaudeBackend: TurnBackend {
 
     func run(utterances: [String], current: Outline?, pageJPEG: Data, paper: PaperSize,
              emit: @escaping (TurnEvent) async -> Void) async throws {
-        let (action, _) = try await client.classify(utterances: utterances, current: current)
+        let (action, note) = try await client.classify(utterances: utterances, current: current)
+        print("[DC] filter: \(action.rawValue) (\(note)) for \(utterances)")
         await emit(.action(action))
         if action == .new || action == .revise {
-            _ = try await client.draw(pageJPEG: pageJPEG, paper: paper, utterances: utterances,
+            let n = try await client.draw(pageJPEG: pageJPEG, paper: paper, utterances: utterances,
                                       current: current, action: action) { await emit(.stroke($0)) }
+            print("[DC] draw: \(n) strokes")
         }
         await emit(.done)
     }

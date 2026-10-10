@@ -112,11 +112,18 @@ final class AppModel: ObservableObject {
               let jpeg = PageImaging.uploadJPEG(frame.capturedImage, corners: corners, paper: ar.paper),
               let baseline = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.trackWidth, height: trackH)
         else {
+            print("[DC] page not ready, waiting")
             waitingForPage = true // sent from tick() once the page is in view
             return
         }
         waitingForPage = false
+        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            try? jpeg.write(to: dir.appendingPathComponent("last-page.jpg"))
+            print("[DC] page jpeg \(jpeg.count) bytes, paper \(ar.paper), corners \(corners), image \(frame.camera.imageResolution)")
+        }
 
+        let style = PageImaging.inkStyle(frame.capturedImage, corners: corners, paper: ar.paper)
+        print("[DC] ink style \(style)")
         let utterances = pending
         let current = outline
         let paper = ar.paper
@@ -127,13 +134,14 @@ final class AppModel: ObservableObject {
         inflight = Task { [weak self] in
             do {
                 try await backend.run(utterances: utterances, current: current, pageJPEG: jpeg, paper: paper) { event in
-                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper)
+                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style)
                 }
             } catch {
                 guard let self, id == self.turnID, !Task.isCancelled else { return }
                 self.rollback?()
                 self.rollback = nil
                 self.pending.removeFirst(min(utterances.count, self.pending.count)) // don't retry forever
+                print("[DC] turn error: \(error)")
                 self.report(error.localizedDescription)
             }
             if let self, id == self.turnID {
@@ -146,16 +154,20 @@ final class AppModel: ObservableObject {
     private var turnAction: TurnAction = .ignore
     private var turnDrawing = false
 
-    private func handle(_ event: TurnEvent, turn id: Int, utterances: [String], baseline: (gray: [Float], height: Int), paper: PaperSize) {
+    private func handle(_ event: TurnEvent, turn id: Int, utterances: [String], baseline: (gray: [Float], height: Int),
+                        paper: PaperSize, style: InkStyle) {
         guard id == turnID else { return } // a newer turn replaced this one
         switch event {
         case let .action(action):
             turnAction = action
             if action == .hide { clearOutline() }
         case let .stroke(stroke):
+            if let f = stroke.points.first, let w = ar.world(f), let frame = ar.session.currentFrame {
+                print("[DC] stroke \(stroke.role.rawValue) pts=\(stroke.points.count) first=\(f) img=\(String(describing: ARController.project(w, camera: frame.camera))) imgSize=\(frame.camera.imageResolution)")
+            }
             if !turnDrawing {
                 turnDrawing = true
-                beginOutline(action: turnAction, utterances: utterances)
+                beginOutline(action: turnAction, utterances: utterances, style: style)
             }
             outline?.strokes.append(stroke)
         case .done:
@@ -167,14 +179,14 @@ final class AppModel: ObservableObject {
 
     /// Show a new outline that is still arriving. Clearing is paused until
     /// it's complete; if the turn is cancelled first, the old outline returns.
-    private func beginOutline(action: TurnAction, utterances: [String]) {
+    private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle) {
         let previous = (outline, tracker, trackState, fadeStart)
         rollback = { [weak self] in
             guard let self else { return }
             (self.outline, self.tracker, self.trackState, self.fadeStart) = previous
         }
         let history = action == .revise && outline != nil ? outline!.history + utterances : utterances
-        outline = Outline(strokes: [], history: history)
+        outline = Outline(strokes: [], history: history, style: style)
         tracker = nil
         trackState = nil
         fadeStart = nil
@@ -221,7 +233,8 @@ final class AppModel: ObservableObject {
 
     func scene() -> Renderer.Scene {
         let fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
-        return Renderer.Scene(headset: headset, strokes: outline?.strokes ?? [], progress: trackState?.strokes, fade: fade)
+        return Renderer.Scene(headset: headset, strokes: outline?.strokes ?? [], style: outline?.style ?? .fallback,
+                              progress: trackState?.strokes, fade: fade)
     }
 
     // MARK: problems (setup issues only; the AI itself never "says" anything)

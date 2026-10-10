@@ -106,6 +106,11 @@ final class SpeechListener {
     private func finishPhrase() {
         pauseTimer?.invalidate()
         let phrase = heard.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cancelling the task fires its callback once more; moving to a new
+        // generation first makes that late callback a no-op instead of a
+        // second copy of this phrase.
+        generation += 1
+        heard = ""
         task?.cancel()
         request?.endAudio()
         task = nil
