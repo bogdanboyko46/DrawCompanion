@@ -7,3 +7,5 @@ __pycache__/
 !.env.example
 xcuserdata/
 *.xcuserstate
+ios/DrawCompanion3D/DevKeys.plist
+ios/build/

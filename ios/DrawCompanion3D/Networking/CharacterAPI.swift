@@ -111,7 +111,7 @@ struct LocalLibrary {
 
     /// Downloads the model (and thumbnail) for a finished job and records it.
     @discardableResult
-    func save(_ job: CharacterJob, using api: CharacterAPI) async throws -> URL {
+    func save(_ job: CharacterJob, using api: any CharacterBackend) async throws -> URL {
         guard let model = job.model else { throw CharacterAPI.ServerError(message: "The character has no model yet.") }
         try FileManager.default.createDirectory(at: folder(job.id), withIntermediateDirectories: true)
         if !hasModel(job.id) {

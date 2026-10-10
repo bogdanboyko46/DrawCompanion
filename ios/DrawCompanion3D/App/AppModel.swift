@@ -41,6 +41,9 @@ final class AppModel {
     var recording: RecordingItem?
     var isRecording = false
     var serverAddress: String
+    /// Generate with the companion server on a Mac instead of on this phone.
+    var useServer: Bool
+    var keysReady = Keys.haveBoth
 
     @ObservationIgnored let scene = SceneController()
     @ObservationIgnored private let local = LocalLibrary()
@@ -54,8 +57,19 @@ final class AppModel {
         CharacterAPI(baseURL: URL(string: serverAddress.trimmingCharacters(in: .whitespaces)) ?? URL(string: "http://localhost:8787")!)
     }
 
+    /// Where characters are made: this phone by default, or the Mac server.
+    var backend: any CharacterBackend { useServer ? api : OnDeviceEngine.shared }
+
+    /// The stages shown while making a character. On the phone there's no rig or animation.
+    var stages: [GenerationStage] {
+        useServer ? GenerationStage.allCases : [.read, .concept, .review, .sculpt, .package]
+    }
+
     init() {
         serverAddress = UserDefaults.standard.string(forKey: "serverAddress") ?? "http://192.168.1.10:8787"
+        useServer = UserDefaults.standard.bool(forKey: "useServer")
+        Keys.importBundledDevKeys()
+        keysReady = Keys.haveBoth
         scene.onPageOutline = { [weak self] outline in self?.pageOutline = outline }
         scene.onHeadPositions = { [weak self] heads in
             guard let self, !self.speech.isEmpty else { return }
@@ -73,6 +87,11 @@ final class AppModel {
     }
 
     private func make() async {
+        if !useServer && !keysReady {
+            errorMessage = "Add your Anthropic and Meshy API keys in Settings to make characters on this phone."
+            showSettings = true
+            return
+        }
         errorMessage = nil
         failedJobID = nil
         phase = .capturing
@@ -93,7 +112,7 @@ final class AppModel {
         phase = .making
 
         do {
-            let job = try await api.create(jpeg: captured.jpeg, hint: hint)
+            let job = try await backend.create(jpeg: captured.jpeg, hint: hint)
             self.job = job
             try await follow(job)
         } catch {
@@ -111,7 +130,7 @@ final class AppModel {
         Task {
             defer { scene.detectionEnabled = true }
             do {
-                let job = try await api.retry(id)
+                let job = try await backend.retry(id)
                 self.job = job
                 if let page { scene.beginPortal(for: page) }
                 try await follow(job)
@@ -131,7 +150,7 @@ final class AppModel {
         while job.status == .queued || job.status == .running {
             try await Task.sleep(for: .seconds(1.2))
             do {
-                job = try await api.job(job.id)
+                job = try await backend.job(job.id)
                 misses = 0
             } catch {
                 misses += 1
@@ -146,7 +165,7 @@ final class AppModel {
             if !conceptRequested, let url = job.conceptUrl {
                 conceptRequested = true
                 Task {
-                    let image = try? await api.image(at: url)
+                    let image = try? await backend.image(at: url)
                     guard let image, let cg = image.cgImage else { return }
                     // Vision is slow; keep it off the main thread.
                     let cut = await Task.detached { PageScanner.cutout(cg) ?? cg }.value
@@ -160,7 +179,7 @@ final class AppModel {
             failedJobID = job.id
             throw CharacterAPI.ServerError(message: job.error ?? "The character couldn't be made.")
         }
-        let url = try await local.save(job, using: api)
+        let url = try await local.save(job, using: backend)
         _ = try await scene.materialize(job: job, modelURL: url, page: page)
         phase = .alive
         hint = ""
@@ -183,7 +202,7 @@ final class AppModel {
     func refreshLibrary() {
         library = local.all()
         Task {
-            guard let remote = try? await api.list() else { return }
+            guard let remote = try? await backend.list() else { return }
             let known = Set(library.map(\.id))
             library += remote.filter { $0.status == .ready && !known.contains($0.id) }
         }
@@ -197,7 +216,7 @@ final class AppModel {
         }
         Task {
             do {
-                let url = try await local.save(job, using: api)
+                let url = try await local.save(job, using: backend)
                 _ = try await scene.place(job: job, modelURL: url)
                 phase = .alive
                 refreshLibrary()
@@ -215,7 +234,7 @@ final class AppModel {
     func thumbnail(for job: CharacterJob) -> URL {
         let file = local.thumbnailURL(job.id)
         if FileManager.default.fileExists(atPath: file.path) { return file }
-        return api.resolve(job.thumbnailUrl ?? job.drawingUrl)
+        return backend.resolve(job.thumbnailUrl ?? job.drawingUrl)
     }
 
     func clearRoom() {
@@ -273,6 +292,43 @@ final class AppModel {
 
     func saveServerAddress() {
         UserDefaults.standard.set(serverAddress, forKey: "serverAddress")
+    }
+
+    func saveUseServer() {
+        UserDefaults.standard.set(useServer, forKey: "useServer")
+        refreshLibrary()
+    }
+
+    func saveKeys(anthropic: String, meshy: String) {
+        if !anthropic.isEmpty { Keys.set(anthropic, for: Keys.anthropic) }
+        if !meshy.isEmpty { Keys.set(meshy, for: Keys.meshy) }
+        keysReady = Keys.haveBoth
+    }
+
+    /// Checks both keys with free calls (Anthropic model list, Meshy balance).
+    func testKeys() async -> String {
+        guard let a = Keys.value(Keys.anthropic), let m = Keys.value(Keys.meshy) else {
+            return "Add both keys first."
+        }
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models?limit=1")!)
+        request.setValue(a, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        let claude: String
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            claude = status == 200 ? "Anthropic ✓" : "Anthropic key rejected (\(status))"
+        } catch {
+            claude = "Anthropic unreachable"
+        }
+        let meshy: String
+        do {
+            try await MeshyClient(apiKey: m).checkKey()
+            meshy = "Meshy ✓"
+        } catch {
+            meshy = error.localizedDescription
+        }
+        return "\(claude) · \(meshy)"
     }
 
     func testConnection() async -> String {

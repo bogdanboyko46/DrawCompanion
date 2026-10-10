@@ -38,7 +38,7 @@ struct GenerationCard: View {
                 .animation(.easeInOut, value: job?.progress)
 
             VStack(alignment: .leading, spacing: 7) {
-                ForEach(GenerationStage.allCases) { stage in
+                ForEach(model.stages) { stage in
                     StageRow(stage: stage, state: state(of: stage, job: job))
                 }
             }
@@ -73,8 +73,8 @@ struct GenerationCard: View {
         guard let job, let current = GenerationStage(rawValue: job.stage) else {
             return stage == .read ? .active : .waiting
         }
-        let all = GenerationStage.allCases
-        let i = all.firstIndex(of: stage)!, c = all.firstIndex(of: current)!
+        let all = model.stages
+        guard let i = all.firstIndex(of: stage), let c = all.firstIndex(of: current) else { return .waiting }
         return i < c ? .done : (i == c ? .active : .waiting)
     }
 
