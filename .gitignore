@@ -3,3 +3,7 @@ node_modules/
 *.log
 data/
 __pycache__/
+.env.*
+!.env.example
+xcuserdata/
+*.xcuserstate
