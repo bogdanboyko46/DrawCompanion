@@ -107,44 +107,84 @@ enum PageScanner {
         return rectify(pixelBuffer, page: page, aspect: 0.75)
     }
 
-    /// Divide out the lamp's tint: treat the bright end of the page as paper white.
+    /// Divide out the lamp's tint, using the page's blank margins as paper white.
+    /// Nothing else is touched: the scan should be faithful, styling happens later.
     static func whiteBalanced(_ image: CIImage) -> CIImage {
-        let avg = CIFilter.areaAverage()
-        avg.inputImage = image
-        avg.extent = image.extent
-        guard let pixel = avg.outputImage else { return image }
-        var rgba = [UInt8](repeating: 0, count: 4)
-        ciContext.render(pixel, toBitmap: &rgba, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
-                         format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
-        // The average includes ink, so lift it toward the paper before using it as white,
-        // then divide it out (Core Image filters work in linear light).
-        let paper = rgba.prefix(3).map { CGFloat(min(1, max(0.35, Double($0) / 255 * 1.08))) }
+        let e = image.extent
+        let inset: CGFloat = 0.015, depth: CGFloat = 0.03
+        let strips = [
+            CGRect(x: e.minX, y: e.maxY - e.height * (inset + depth), width: e.width, height: e.height * depth), // top
+            CGRect(x: e.minX, y: e.minY + e.height * inset, width: e.width, height: e.height * depth),           // bottom
+            CGRect(x: e.minX + e.width * inset, y: e.minY, width: e.width * depth, height: e.height),            // left
+            CGRect(x: e.maxX - e.width * (inset + depth), y: e.minY, width: e.width * depth, height: e.height),  // right
+        ]
+        // A margin can hold a doodle or a shadow: take the median strip by brightness.
+        let samples = strips.compactMap { averageLinear(image, in: $0) }.sorted { $0.reduce(0, +) < $1.reduce(0, +) }
+        guard samples.count == 4 else { return image }
+        let paper = (0..<3).map { max(0.3, (samples[1][$0] + samples[2][$0]) / 2) }
         let gain = CIFilter.colorMatrix()
         gain.inputImage = image
         gain.rVector = CIVector(x: 1 / paper[0], y: 0, z: 0, w: 0)
         gain.gVector = CIVector(x: 0, y: 1 / paper[1], z: 0, w: 0)
         gain.bVector = CIVector(x: 0, y: 0, z: 1 / paper[2], w: 0)
-        let controls = CIFilter.colorControls()
-        controls.inputImage = gain.outputImage ?? image
-        controls.contrast = 1.08
-        controls.saturation = 1.12
-        return controls.outputImage ?? image
+        return gain.outputImage ?? image
     }
 
-    /// Lifts the drawn figure off the paper so it can float as a cutout.
-    /// `cropped: false` keeps the page's frame, so the cutout lines up with the paper.
-    static func cutout(_ image: CGImage, cropped: Bool = true) -> CGImage? {
+    /// Average color of a region in linear light (Core Image's working space).
+    static func averageLinear(_ image: CIImage, in rect: CGRect) -> [CGFloat]? {
+        let avg = CIFilter.areaAverage()
+        avg.inputImage = image
+        avg.extent = rect
+        guard let pixel = avg.outputImage else { return nil }
+        var rgba = [Float](repeating: 0, count: 4)
+        ciContext.render(pixel, toBitmap: &rgba, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                         format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
+        return rgba.prefix(3).map { CGFloat($0) }
+    }
+
+    /// Lifts the drawing off the paper so it can float as a cutout, keeping the
+    /// page's frame so it lines up with the paper.
+    ///
+    /// Everything that's ink stays (subject-lift alone drops thin lines like
+    /// stick arms); Vision's subject mask is added on top so solid white parts
+    /// of the character don't turn see-through.
+    static func cutout(_ image: CGImage) -> CGImage? {
+        let source = CIImage(cgImage: image)
+        var mask = inkMask(source)
         let request = VNGenerateForegroundInstanceMaskRequest()
         let handler = VNImageRequestHandler(cgImage: image)
-        do {
-            try handler.perform([request])
-            guard let obs = request.results?.first, !obs.allInstances.isEmpty else { return nil }
-            let masked = try obs.generateMaskedImage(ofInstances: obs.allInstances, from: handler, croppedToInstancesExtent: cropped)
-            let ci = CIImage(cvPixelBuffer: masked)
-            return ciContext.createCGImage(ci, from: ci.extent)
-        } catch {
-            return nil
+        if (try? handler.perform([request])) != nil,
+           let obs = request.results?.first, !obs.allInstances.isEmpty,
+           let subject = try? obs.generateScaledMaskForImage(forInstances: obs.allInstances, from: handler) {
+            let union = CIFilter.maximumCompositing()
+            union.inputImage = CIImage(cvPixelBuffer: subject)
+            union.backgroundImage = mask
+            mask = union.outputImage ?? mask
         }
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = source
+        blend.backgroundImage = CIImage.empty()
+        blend.maskImage = mask
+        guard let out = blend.outputImage else { return nil }
+        return ciContext.createCGImage(out.cropped(to: source.extent), from: source.extent)
+    }
+
+    /// 1 where something is drawn, 0 on blank paper, soft at the edges.
+    static func inkMask(_ image: CIImage) -> CIImage {
+        // How far the darkest channel falls below paper white catches both dark
+        // lines and light colors (a pale yellow still has a low blue channel).
+        let darkest = CIFilter.minimumComponent()
+        darkest.inputImage = image
+        let k: CGFloat = 6, paperTolerance: CGFloat = 0.15 // uneven light on blank paper stays clear
+        let ramp = CIFilter.colorMatrix()
+        ramp.inputImage = darkest.outputImage
+        ramp.rVector = CIVector(x: -k, y: 0, z: 0, w: 0)
+        ramp.gVector = CIVector(x: 0, y: -k, z: 0, w: 0)
+        ramp.bVector = CIVector(x: 0, y: 0, z: -k, w: 0)
+        ramp.biasVector = CIVector(x: k * (1 - paperTolerance), y: k * (1 - paperTolerance), z: k * (1 - paperTolerance), w: 0)
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = ramp.outputImage
+        return (clamp.outputImage ?? image).cropped(to: image.extent)
     }
 
     /// Paper frame from its world corners (TL, TR, BR, BL).

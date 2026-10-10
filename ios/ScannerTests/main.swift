@@ -92,6 +92,17 @@ func average(_ image: CIImage, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) -
     return px.prefix(3).map(Double.init)
 }
 
+/// Highest alpha in a region (fractions, origin top-left).
+func alphaMax(_ image: CIImage, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) -> Double {
+    let e = image.extent
+    let rect = CGRect(x: e.minX + x * e.width, y: e.minY + (1 - y - h) * e.height, width: w * e.width, height: h * e.height)
+    let f = CIFilter(name: "CIAreaMaximumAlpha", parameters: [kCIInputImageKey: image, kCIInputExtentKey: CIVector(cgRect: rect)])!
+    var px = [UInt8](repeating: 0, count: 4)
+    ci.render(f.outputImage!, toBitmap: &px, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+              format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+    return Double(px[3]) / 255
+}
+
 /// A small JPEG, base64, so results can be looked at straight from the CI log.
 func thumbnail(_ image: CGImage, maxSide: CGFloat = 240) -> String {
     var ciImage = CIImage(cgImage: image)
@@ -169,7 +180,7 @@ for c in spec.cases {
         // On screen a turned page is rotated 90° clockwise: page (u, v) → screen (1 - v, u).
         let got = portrait ? average(out, x: u, y: v, w: du, h: dv) : average(out, x: 1 - v - dv, y: u, w: dv, h: du)
         let worst = zip(want, got).map { abs($0 - $1) }.max()!
-        check(worst < 40, "\(label) keeps its color: \(got.map { Int($0) }) vs drawn \(want.map { Int($0) })")
+        check(worst < 30, "\(label) keeps its color: \(got.map { Int($0) }) vs drawn \(want.map { Int($0) })")
     }
     print("THUMB \(name)-rectified \(thumbnail(rectified))")
 
@@ -187,12 +198,21 @@ for c in spec.cases {
 
     // Cutout for the portal: the figure lifted off the paper, aligned with the page.
     let started2 = Date()
-    if let cut = PageScanner.cutout(rectified, cropped: false) {
+    if let cut = PageScanner.cutout(rectified) {
         save(cut, "\(name)-cutout.png")
         print("THUMB \(name)-cutout \(thumbnail(cut))")
         let px = pixels(CIImage(cgImage: cut), 64, 90)
         let coverage = Double(stride(from: 3, to: px.count, by: 4).filter { px[$0] > 128 }.count) / Double(64 * 90)
         check(cut.width == rectified.width && cut.height == rectified.height, "cutout keeps the page frame (\(cut.width)×\(cut.height))")
+        // Thin lines survive: the stick arm and leg are part of the lifted figure.
+        let cutImage = CIImage(cgImage: cut)
+        for (label, u, v) in [("stick arm", 0.214, 0.471), ("stick leg", 0.39, 0.81)] as [(String, CGFloat, CGFloat)] {
+            let (x, y) = portrait ? (u, v) : (1 - v, u)
+            let a = alphaMax(cutImage, x: x - 0.015, y: y - 0.015, w: 0.03, h: 0.03)
+            check(a > 0.6, "cutout keeps the \(label) (alpha \(String(format: "%.2f", a)))")
+        }
+        let blank = alphaMax(cutImage, x: 0.85, y: 0.05, w: 0.08, h: 0.05)
+        check(blank < 0.2, "blank paper is see-through (alpha \(String(format: "%.2f", blank)))")
         check(coverage > 0.08 && coverage < 0.6,
               "cutout isolates the figure: \(Int(coverage * 100))% of the page (\(Int(Date().timeIntervalSince(started2) * 1000)) ms)")
     } else {
