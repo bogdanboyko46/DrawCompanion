@@ -269,7 +269,11 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.aligning = false
-                guard self.aligner === aligner, let found else { return }
+                guard self.aligner === aligner, let found else {
+                    print("[DC] align: no match")
+                    return
+                }
+                print(String(format: "[DC] align: shift %.1f,%.1f px  scale %.3f  rot %.3f", found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
                 // Smooth out measurement jitter; big real moves still land within a few steps.
                 self.correction = self.correction.blended(toward: found, by: 0.6)
             }
