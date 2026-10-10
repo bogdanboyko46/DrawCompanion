@@ -10,6 +10,7 @@ You draw on real paper wearing a lightweight headset: your phone in a head-mount
 |---|---|
 | Display | **Headset**: a phone in a lightweight viewer (video see-through using the phone's camera). The handheld phone view stays for setup and debugging. |
 | Outline generation | **Claude draws the strokes directly** from a photo of the page. No image-generation pipeline. |
+| Which AI | **Two stages.** Claude Haiku 5.5 (fast, cheap) hears every phrase and decides what it means. Claude Opus 5.5 is called only when there's something to draw or change. |
 | Where it goes | **Entirely the AI's call.** No box, no pointing: it reads the drawing and the request ("on the windowsill") and places the outline. |
 | Talking to it | **Always listening, never replying.** Every phrase goes to the AI, which decides: draw something new, change the current outline, clear it, or ignore the speech (thinking aloud, talking to someone else). |
 | Color | Not a focus. |
@@ -24,8 +25,9 @@ You draw on real paper wearing a lightweight headset: your phone in a head-mount
       │      → top-down page image (768px) + labeled grid
       │        + what was said + the outline currently shown ─► POST /api/turn
       │                                                            │
-      │        server: Claude (vision, structured output) decides  │
-      │          new | revise | hide | ignore  (+ strokes)         │
+      │        server: 1. Haiku (text only) decides                │
+      │                   new | revise | hide | ignore             │
+      │                2. new/revise only: Opus + photo → strokes  │
       │                                                            │
       ├─ every frame: project strokes through H into both eyes ◄───┘
       │
@@ -53,7 +55,11 @@ Detection runs on a 960-pixel-wide copy of each frame. The pose is fit to every 
 
 ### Talking to it
 
-- **Every phrase is a turn.** When the speech recognizer finishes a phrase, the app sends it with a fresh photo of the page and the outline currently shown (plus the requests that produced it). The AI picks one action:
+- **Every phrase is a turn.** When the speech recognizer finishes a phrase, the app sends it with a fresh photo of the page and the outline currently shown (plus the requests that produced it). The server handles it in two stages:
+  1. **Filter (Claude Haiku 5.5, text only).** Reads what was said and whether an outline is showing, and picks the action below. It doesn't see the photo, which keeps it quick and costs a fraction of a cent. Chatter, "clear it", and anything ignored stop here.
+  2. **Draw (Claude Opus 5.5, with the photo).** Runs only for new and revise, and returns the strokes.
+
+  The actions:
 
 | Action | When | Example |
 |---|---|---|
@@ -81,7 +87,7 @@ Implemented in `public/completion.js`, and unit-tested:
 ## Risks that remain
 
 1. **Placement without a box.** The AI must infer where you mean from the drawing and your words. When it guesses wrong, "move it to the left of the house" fixes it, but each fix is another round trip. Watch how often the first placement needs moving.
-2. **An always-on microphone.** Every phrase becomes a model call (image included), even ones that end up ignored. That's the main cost driver and the main latency driver. If cost matters, a cheap first pass (a smaller model, or a local check for whether speech is addressed to the assistant) can filter chatter before the full call. Also: browser speech recognition on Chrome sends audio to the browser vendor's speech service; users should know the microphone is live the whole time.
+2. **An always-on microphone.** Every phrase costs a Haiku call (cheap), and drawing requests pay for two calls in a row, so they take a little longer than a single call would. The filter only reads words: a phrase that only makes sense with the picture ("that one's too dark") is judged without it. Also: browser speech recognition on Chrome sends audio to the browser vendor's speech service; users should know the microphone is live the whole time.
 3. **Ignoring the right things.** "That flower looks bad" could be a request or just a comment. Measure false draws (outlines nobody asked for) and missed requests.
 4. **Hand-eye coordination through a camera.** You draw while watching a camera feed on a screen centimeters from your eyes. The `ZOOM` constant in `public/app.js` sets how much of the camera image each eye sees and is the main thing to tune on the real viewer. Lens distortion correction for the specific viewer is not done yet.
 5. **Leaning in very close** can push every marker out of view. The outline then hides until a marker is visible again.
@@ -90,8 +96,8 @@ Implemented in `public/completion.js`, and unit-tested:
 
 ## Roadmap
 
-1. **Now (this repo):** headset and phone views, printed-template tracking, always-on voice with AI-decided actions and placement, 3-second clearing.
-2. **Cost and latency:** a cheap filter for speech that isn't a request; streaming so construction lines appear first.
+1. **Now (this repo):** headset and phone views, printed-template tracking, always-on voice with a Haiku filter and Opus drawing, AI-decided placement, 3-second clearing.
+2. **Latency:** stream the drawing so construction lines appear first; measure whether the drawing stage can move to a faster model without hurting placement.
 3. **Comfort:** per-viewer lens correction and zoom calibration.
 4. **Polish:** a per-drawing style memory, so later suggestions match earlier ones.
 
@@ -101,4 +107,5 @@ Implemented in `public/completion.js`, and unit-tested:
 - **Placement accepted:** outlines traced without a "move it" correction.
 - **False draws and missed requests:** outlines nobody asked for; requests that were ignored.
 - **Early clears:** outlines that faded while the user was still drawing.
-- **Model calls per session**, and the share that ended in ignore.
+- **Filter accuracy:** phrases the filter ignored that were requests, and chatter it passed on to the drawing model.
+- **Drawing calls per session** versus phrases heard.

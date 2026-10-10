@@ -64,8 +64,9 @@ async function handleTurn(req, res) {
   try {
     if (MOCK) await sleep(MOCK_DELAY_MS, abort.signal);
     const result = MOCK ? mockDecision(args) : await decide(args);
-    console.log(`${result.action.padEnd(6)} ${Date.now() - started}ms "${utterances.join(" / ")}" (${result.note})`);
-    send(res, 200, result);
+    const stages = result.ms ? ` [filter ${result.ms.filter}ms${result.ms.draw != null ? `, draw ${result.ms.draw}ms` : ""}]` : "";
+    console.log(`${result.action.padEnd(6)} ${Date.now() - started}ms${stages} "${utterances.join(" / ")}" (${result.note})`);
+    send(res, 200, { action: result.action, suggestion: result.suggestion });
   } catch (err) {
     if (err instanceof Anthropic.APIUserAbortError || abort.signal.aborted) return; // superseded by a newer turn
     if (err instanceof SuggestError) return send(res, 422, { error: err.message });
