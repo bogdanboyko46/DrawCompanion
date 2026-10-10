@@ -7,6 +7,7 @@
 //                      and a Python with Blender's bpy, see README)
 //   npm run mock       canned results, no API calls; for app and UI work
 
+import "./env.js"; // must stay first: loads .env before other modules read it
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

@@ -43,6 +43,8 @@ Characters the auto-rigger can't take (four-legged animals, blobs, objects) stil
 
 ## Server setup (real characters)
 
+Put your keys in `.env` at the repo root (`cp .env.example .env && open -e .env`, paste, ⌘S). The server loads it automatically, and it's git-ignored.
+
 `npm start` needs three things:
 
 | What | Why | Setup |
