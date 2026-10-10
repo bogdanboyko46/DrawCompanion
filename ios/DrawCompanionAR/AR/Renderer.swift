@@ -27,6 +27,17 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let linePipeline: MTLRenderPipelineState
     private var textureCache: CVMetalTextureCache!
 
+    private struct LineUniforms {
+        var viewport: SIMD4<Float>
+        var crop: SIMD4<Float>
+        var hasMask: Float
+    }
+
+    private lazy var emptyMask: MTLTexture? = {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: 1, height: 1, mipmapped: false)
+        return device.makeTexture(descriptor: d)
+    }()
+
     private struct LineVertex {
         var position: SIMD2<Float>
         var pad = SIMD2<Float>(0, 0) // matches Metal's float2 + float4 layout
@@ -79,6 +90,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let scene = scene()
         let image = frame.camera.imageResolution
+        // Person (hand) mask for this frame, when the phone supports it.
+        let mask = frame.segmentationBuffer.flatMap { texture($0, plane: 0, format: .r8Unorm) }
         // Outline points in camera-image pixels, computed once for both eyes.
         let projected: [[CGPoint?]] = scene.strokes.map { stroke in
             stroke.points.map { p in controller.world(p).flatMap { ARController.project($0, camera: frame.camera) } }
@@ -109,11 +122,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             if !vertices.isEmpty, let buffer = device.makeBuffer(bytes: vertices, length: MemoryLayout<LineVertex>.stride * vertices.count, options: []) {
                 encoder.setRenderPipelineState(linePipeline)
                 encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+                var uniforms = LineUniforms(
+                    viewport: SIMD4(Float(vp.rect.minX), Float(vp.rect.minY), Float(vp.rect.width), Float(vp.rect.height)),
+                    crop: crop,
+                    hasMask: mask == nil ? 0 : 1)
+                encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LineUniforms>.stride, index: 0)
+                encoder.setFragmentTexture(mask.flatMap(CVMetalTextureGetTexture) ?? emptyMask, index: 0)
                 encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
             }
         }
         encoder.endEncoding()
-        commandBuffer.addCompletedHandler { _ in _ = (y, cbcr) } // keep the camera textures alive until the GPU is done
+        commandBuffer.addCompletedHandler { _ in _ = (y, cbcr, mask) } // keep the camera textures alive until the GPU is done
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
@@ -241,7 +260,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         var texture: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             nil, textureCache, buffer, nil, format,
-            CVPixelBufferGetWidthOfPlane(buffer, plane), CVPixelBufferGetHeightOfPlane(buffer, plane), plane, &texture)
+            CVPixelBufferIsPlanar(buffer) ? CVPixelBufferGetWidthOfPlane(buffer, plane) : CVPixelBufferGetWidth(buffer),
+            CVPixelBufferIsPlanar(buffer) ? CVPixelBufferGetHeightOfPlane(buffer, plane) : CVPixelBufferGetHeight(buffer),
+            plane, &texture)
         return status == kCVReturnSuccess ? texture : nil
     }
 }

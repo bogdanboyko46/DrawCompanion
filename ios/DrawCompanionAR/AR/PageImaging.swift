@@ -29,8 +29,8 @@ enum PageImaging {
     /// paper units, which makes its coordinates much more accurate.
     static func uploadJPEG(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], paper: PaperSize, width: Int = 768) -> Data? {
         let height = Int((Double(width) * paper.h / paper.w).rounded())
-        guard let page = rectified(pixelBuffer, corners: corners, width: width, height: height),
-              let cg = context.createCGImage(page, from: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let raw = rgba(pixelBuffer, corners: corners, width: width, height: height),
+              let cg = cgImage(rgba: PageEnhance.enhanced(rgba: raw, width: width, height: height), width: width, height: height)
         else { return nil }
         let size = CGSize(width: width, height: height)
         let format = UIGraphicsImageRendererFormat()
@@ -59,12 +59,19 @@ enum PageImaging {
         return image.jpegData(compressionQuality: 0.85)
     }
 
-    /// How the drawing on the page looks (ink color and line thickness).
+    /// How the drawing on the page looks (ink color and line thickness),
+    /// measured from the raw camera colors so the outline matches what's on screen.
     static func inkStyle(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], paper: PaperSize, width: Int = 480) -> InkStyle {
         let height = Int((Double(width) * paper.h / paper.w).rounded())
+        guard let bytes = rgba(pixelBuffer, corners: corners, width: width, height: height) else { return .fallback }
+        return InkStyle.estimate(rgba: bytes, width: width, height: height, paperWidth: paper.w)
+    }
+
+    /// Top-down page as RGBA bytes (sRGB, row 0 = top of the page).
+    static func rgba(_ pixelBuffer: CVPixelBuffer, corners: [CGPoint], width: Int, height: Int) -> [UInt8]? {
         guard let page = rectified(pixelBuffer, corners: corners, width: width, height: height),
               let cg = context.createCGImage(page, from: CGRect(x: 0, y: 0, width: width, height: height))
-        else { return .fallback }
+        else { return nil }
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         let ok = bytes.withUnsafeMutableBytes { buf -> Bool in
             guard let ctx = CGContext(data: buf.baseAddress, width: width, height: height, bitsPerComponent: 8,
@@ -73,7 +80,14 @@ enum PageImaging {
             ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
-        return ok ? InkStyle.estimate(rgba: bytes, width: width, height: height, paperWidth: paper.w) : .fallback
+        return ok ? bytes : nil
+    }
+
+    private static func cgImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
     /// Small grayscale top-down page (0–255, row 0 = top of the page) for

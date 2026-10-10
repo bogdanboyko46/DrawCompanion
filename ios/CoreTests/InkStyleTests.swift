@@ -37,3 +37,21 @@ final class InkStyleTests: XCTestCase {
         XCTAssertEqual(InkStyle.estimate(rgba: blank, width: 400, height: 300, paperWidth: 1000), .fallback)
     }
 }
+
+final class PageEnhanceTests: XCTestCase {
+    func testDimYellowPaperBecomesWhiteAndPencilDarker() {
+        let w = 100, h = 100
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        for i in 0..<(w * h) {
+            let pencil = i % w < 5 // 5% of the page is pencil
+            let c: (UInt8, UInt8, UInt8) = pencil ? (110, 105, 90) : (180, 170, 140)
+            px[i * 4] = c.0; px[i * 4 + 1] = c.1; px[i * 4 + 2] = c.2; px[i * 4 + 3] = 255
+        }
+        let out = PageEnhance.enhanced(rgba: px, width: w, height: h)
+        let paper = Array(out[(50 * 4)..<(50 * 4 + 3)])
+        XCTAssertTrue(paper.allSatisfy { $0 > 230 }, "paper \(paper)")
+        XCTAssertLessThan(abs(Int(paper[0]) - Int(paper[2])), 6, "tint removed")
+        let pencil = Int(out[0]), paperR = Int(paper[0])
+        XCTAssertGreaterThan(paperR - pencil, 180 - 110, "pencil stands out more than before")
+    }
+}

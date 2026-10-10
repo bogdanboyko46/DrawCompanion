@@ -47,6 +47,26 @@ vertex LineOut lineVertex(uint vid [[vertex_id]], const device LineVertex *verti
     return out;
 }
 
-fragment float4 lineFragment(LineOut in [[stage_in]]) {
-    return in.color;
+// Where to look up the hand mask for a fragment: the viewport rect in
+// render-target pixels and the part of the camera image it shows.
+struct LineUniforms {
+    float4 viewport; // x, y, width, height
+    float4 crop;     // u0, v0, u1, v1 in normalized image coords
+    float hasMask;
+};
+
+// Lines fade almost out where ARKit sees a person (your hand and pen), so the
+// outline looks like it's on the paper, under your hand, not floating on top.
+fragment float4 lineFragment(LineOut in [[stage_in]],
+                             constant LineUniforms &u [[buffer(0)]],
+                             texture2d<float, access::sample> personMask [[texture(0)]]) {
+    float4 color = in.color;
+    if (u.hasMask > 0.5) {
+        constexpr sampler s(address::clamp_to_edge, filter::linear);
+        float2 t = (in.position.xy - u.viewport.xy) / u.viewport.zw;
+        float2 uv = mix(u.crop.xy, u.crop.zw, t);
+        float person = personMask.sample(s, uv).r;
+        color.a *= 1.0 - 0.85 * smoothstep(0.3, 0.7, person);
+    }
+    return color;
 }

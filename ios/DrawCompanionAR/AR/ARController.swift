@@ -43,6 +43,10 @@ final class ARController: NSObject, ARSessionDelegate {
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
             config.sceneReconstruction = .mesh
         }
+        // Lets the outline go under your hand instead of being drawn over it.
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentation) {
+            config.frameSemantics.insert(.personSegmentation)
+        }
         // The sharpest 4:3 format: the page photo sent to the AI comes from this image.
         if let format = ARWorldTrackingConfiguration.supportedVideoFormats
             .filter({ abs($0.imageResolution.width / $0.imageResolution.height - 4.0 / 3.0) < 0.01 })
