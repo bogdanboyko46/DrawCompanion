@@ -1,9 +1,10 @@
 // Minimal HTTP server: serves the web client and proxies each spoken turn
 // to Claude so the API key never reaches the device.
 //
-//   npm start          real decisions (needs ANTHROPIC_API_KEY or `ant auth login`)
+//   npm start          real decisions (ANTHROPIC_API_KEY in .env, or `ant auth login`)
 //   npm run mock       canned decisions, no API calls; for trying the flow
 
+import "./env.js"; // first, so every module sees the .env settings
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import path from "node:path";

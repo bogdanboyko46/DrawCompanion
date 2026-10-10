@@ -7,15 +7,23 @@ Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 ## Setup
 
 1. **Print the template:** open `/template.html` (A4 or US Letter) and print at 100%. Draw inside the grey frame. The black squares let the app find the page from any angle, so keep them uncovered when you can.
-2. **Run the server** (Node 20+):
+2. **Add your API key** (Mac): this opens the key file in TextEdit. Paste your key right after `ANTHROPIC_API_KEY=`, press ⌘S, and close it.
+
+   ```bash
+   cp .env.example .env
+   open -e .env
+   ```
+
+   `.env` is ignored by git, so the key never gets committed. The server reads it on start; a variable already set in your shell takes precedence.
+3. **Run the server** (Node 20.12+):
 
    ```bash
    npm install
    npm run mock   # canned AI (draws a flower, reacts to "bigger"/"smaller"/"clear"), no API calls
-   npm start      # real AI (uses ANTHROPIC_API_KEY or an `ant auth login` profile)
+   npm start      # real AI (key from .env, or an `ant auth login` profile)
    ```
 
-3. **Open it on the phone.** Camera and microphone access need a secure context: `localhost` on the same machine, or HTTPS (for example through a tunnel) from the phone. Chrome on Android gives the best results (speech input, fullscreen, landscape lock).
+4. **Open it on the phone.** Camera and microphone access need a secure context: `localhost` on the same machine, or HTTPS (for example through a tunnel) from the phone. Chrome on Android gives the best results (speech input, fullscreen, landscape lock).
 
 ## Using it
 
