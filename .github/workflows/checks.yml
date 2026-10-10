@@ -1,0 +1,52 @@
+name: Checks
+
+on:
+  push:
+    branches: ["claude/**", "main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  web:
+    name: Web app tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  ios-core:
+    name: iOS core tests (Swift package)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test --package-path ios
+
+  ios-build:
+    name: Build iOS app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode version
+        run: xcodebuild -version
+      - name: Build for device (unsigned)
+        run: |
+          set +e
+          xcodebuild build \
+            -project ios/DrawCompanionAR.xcodeproj \
+            -target DrawCompanionAR \
+            -sdk iphoneos \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO > build.log 2>&1
+          status=$?
+          grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)" build.log | sort -u | head -150
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-build-log
+          path: build.log
