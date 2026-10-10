@@ -22,6 +22,15 @@ final class AppModel: ObservableObject {
     // The outline and how far it's been traced.
     private var outline: Outline? { didSet { hasOutline = outline != nil; ar.lockPaperSize = outline != nil } }
     private var tracker: CompletionTracker?
+
+    // Drift correction: keeps the outline on the actual pencil lines. The
+    // reference is the page as the AI saw it; `correction` maps the current
+    // top-down view onto it (pixels of an alignWidth-wide image).
+    private var aligner: DrawingAligner?
+    private var correction = Affine2.identity
+    private var aligning = false
+    private let alignQueue = DispatchQueue(label: "drawcompanion.align", qos: .userInitiated)
+    private static let alignWidth = 480
     private var trackState: CompletionTracker.State?
     private var fadeStart: TimeInterval?
     private var lastTrackCorners: [CGPoint]?
@@ -35,6 +44,7 @@ final class AppModel: ObservableObject {
     private var waitingForPage = false
 
     private var timer: Timer?
+    private var alignTimer: Timer?
     private static let trackWidth = 200 // completion-tracking grid; height follows the paper
 
     init() {
@@ -55,6 +65,9 @@ final class AppModel: ObservableObject {
         ar.start()
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
+        }
+        alignTimer = Timer.scheduledTimer(withTimeInterval: 0.14, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.alignStep() }
         }
     }
 
@@ -110,7 +123,8 @@ final class AppModel: ObservableObject {
         let trackH = trackHeight
         guard let frame = ar.session.currentFrame, let corners = ar.imageCorners(in: frame),
               let (photos, style) = PageImaging.photos(frame.capturedImage, corners: corners, paper: ar.paper),
-              let baseline = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.trackWidth, height: trackH)
+              let baseline = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.trackWidth, height: trackH),
+              let reference = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.alignWidth, height: alignHeight)
         else {
             print("[DC] page not ready, waiting")
             waitingForPage = true // sent from tick() once the page is in view
@@ -132,7 +146,7 @@ final class AppModel: ObservableObject {
         inflight = Task { [weak self] in
             do {
                 try await backend.run(utterances: utterances, current: current, page: photos, paper: paper) { event in
-                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style)
+                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style, reference: reference)
                 }
             } catch {
                 guard let self, id == self.turnID, !Task.isCancelled else { return }
@@ -153,7 +167,7 @@ final class AppModel: ObservableObject {
     private var turnDrawing = false
 
     private func handle(_ event: TurnEvent, turn id: Int, utterances: [String], baseline: (gray: [Float], height: Int),
-                        paper: PaperSize, style: InkStyle) {
+                        paper: PaperSize, style: InkStyle, reference: [Float]) {
         guard id == turnID else { return } // a newer turn replaced this one
         switch event {
         case let .action(action):
@@ -165,7 +179,7 @@ final class AppModel: ObservableObject {
             }
             if !turnDrawing {
                 turnDrawing = true
-                beginOutline(action: turnAction, utterances: utterances, style: style)
+                beginOutline(action: turnAction, utterances: utterances, style: style, reference: reference)
             }
             outline?.strokes.append(stroke)
         case .done:
@@ -177,12 +191,15 @@ final class AppModel: ObservableObject {
 
     /// Show a new outline that is still arriving. Clearing is paused until
     /// it's complete; if the turn is cancelled first, the old outline returns.
-    private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle) {
-        let previous = (outline, tracker, trackState, fadeStart)
+    private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle, reference: [Float]) {
+        let previous = (outline, tracker, trackState, fadeStart, aligner, correction)
         rollback = { [weak self] in
             guard let self else { return }
-            (self.outline, self.tracker, self.trackState, self.fadeStart) = previous
+            (self.outline, self.tracker, self.trackState, self.fadeStart, self.aligner, self.correction) = previous
         }
+        // The new outline's coordinates refer to this exact photo: align to it.
+        aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
+        correction = .identity
         let history = action == .revise && outline != nil ? outline!.history + utterances : utterances
         outline = Outline(strokes: [], history: history, style: style)
         tracker = nil
@@ -197,11 +214,15 @@ final class AppModel: ObservableObject {
     }
 
     func clearOutline() {
+        aligner = nil
+        correction = .identity
         outline = nil
         tracker = nil
         trackState = nil
         fadeStart = nil
     }
+
+    private var alignHeight: Int { Int((Double(Self.alignWidth) * ar.paper.h / ar.paper.w).rounded()) }
 
     private var trackHeight: Int { Int((Double(Self.trackWidth) * ar.paper.h / ar.paper.w).rounded()) }
 
@@ -221,7 +242,9 @@ final class AppModel: ObservableObject {
             let moved = zip(last, corners).map { hypot($0.x - $1.x, $0.y - $1.y) }.max() ?? 0
             if moved > frame.camera.imageResolution.width * 0.02 { return }
         }
-        guard let gray = PageImaging.gray(frame.capturedImage, corners: corners, width: tracker.width, height: tracker.height) else { return }
+        guard let raw = PageImaging.gray(frame.capturedImage, corners: corners, width: tracker.width, height: tracker.height) else { return }
+        // Compare in the reference photo's frame, so drift doesn't look like ink.
+        let gray = warpedToReference(raw, width: tracker.width, height: tracker.height)
         let state = tracker.update(gray, now: now)
         trackState = state
         if state.done { fadeStart = now }
@@ -229,9 +252,60 @@ final class AppModel: ObservableObject {
 
     // MARK: rendering
 
+    // MARK: drift correction
+
+    /// Measures how far the outline has drifted from the pencil lines (runs
+    /// off the main thread, several times a second).
+    private func alignStep() {
+        guard let aligner, !aligning, fadeStart == nil, let frame = ar.session.currentFrame,
+              let corners = ar.imageCorners(in: frame) else { return }
+        aligning = true
+        let pixelBuffer = frame.capturedImage
+        let prior = correction
+        let (w, h) = (aligner.width, aligner.height)
+        alignQueue.async { [weak self] in
+            let found = PageImaging.gray(pixelBuffer, corners: corners, width: w, height: h)
+                .flatMap { aligner.align(current: $0, prior: prior) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.aligning = false
+                guard self.aligner === aligner, let found else { return }
+                // Smooth out measurement jitter; big real moves still land within a few steps.
+                self.correction = self.correction.blended(toward: found, by: 0.6)
+            }
+        }
+    }
+
+    /// Paper-units map from the reference photo (where the AI drew) to where
+    /// that spot is in the current view of the page.
+    private var referenceToCurrent: Affine2? {
+        guard aligner != nil, correction != .identity, let inv = correction.inverse else { return nil }
+        let k = ar.paper.w / Double(Self.alignWidth) // paper units per alignment pixel
+        // inv is in pixels: convert p (units) -> px, map, -> units.
+        return Affine2(a: inv.a, b: inv.b, tx: inv.tx * k, c: inv.c, d: inv.d, ty: inv.ty * k)
+    }
+
+    private func warpedToReference(_ gray: [Float], width: Int, height: Int) -> [Float] {
+        guard let map = referenceToCurrent else { return gray }
+        let k = ar.paper.w / Double(width) // paper units per pixel of this image
+        var out = [Float](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let p = map.apply(PaperPoint(x: (Double(x) + 0.5) * k, y: (Double(y) + 0.5) * k))
+                let sx = min(width - 1, max(0, Int(p.x / k))), sy = min(height - 1, max(0, Int(p.y / k)))
+                out[y * width + x] = gray[sy * width + sx]
+            }
+        }
+        return out
+    }
+
     func scene() -> Renderer.Scene {
         let fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
-        return Renderer.Scene(headset: headset, strokes: outline?.strokes ?? [], style: outline?.style ?? .fallback,
+        var strokes = outline?.strokes ?? []
+        if let map = referenceToCurrent {
+            strokes = strokes.map { var s = $0; s.points = s.points.map(map.apply); return s }
+        }
+        return Renderer.Scene(headset: headset, strokes: strokes, style: outline?.style ?? .fallback,
                               progress: trackState?.strokes, fade: fade)
     }
 
