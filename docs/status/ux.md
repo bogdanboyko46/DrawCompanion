@@ -37,7 +37,7 @@ New files I created (no one else owns them): `UI/OnboardingView.swift`, `Core/Ph
 
 ## Headset settings
 
-`ar/headset` hasn't published its UserDefaults keys yet. The Settings › Headset section is driven by one list, `HeadsetOption.all` in `UI/SettingsView.swift`, with placeholder keys `headset.zoom` (default 1.6), `headset.eyeOffset` (mm, 0), `headset.k1` (0.441). When the headset keys land, I'll update that list (one line each).
+Settings › Headset uses the keys from the headset session (`HeadsetOptics.Key`, branch `claude/fervent-turing-1v3ob4`): a "Correct lens distortion" toggle plus sliders for `headset.zoom`, `headset.lensSeparationMM`, `headset.verticalOffsetMM`, `headset.fieldOfViewDegrees`, `headset.k1`, `headset.k2`, `headset.screenToLensMM`, and "Reset to defaults". Defaults match `HeadsetOptics()`. The keys are plain strings in `HeadsetOption.all` (`UI/SettingsView.swift`), so my branch builds without theirs; until their renderer is merged the sliders save values nothing reads yet.
 
 ## Requests for the lead
 
