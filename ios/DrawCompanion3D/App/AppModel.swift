@@ -32,7 +32,7 @@ final class AppModel {
     var errorMessage: String?
     var failedJobID: String?
     var speech: [String: SpeechLine] = [:]
-    var heads: [String: CGPoint] = [:]
+    var heads: [String: BubbleSpot] = [:]
     var library: [CharacterJob] = []
     var showLibrary = false
     var showSettings = false
@@ -60,7 +60,7 @@ final class AppModel {
 
     /// The stages shown while making a character. On the phone there's no rig or animation.
     var stages: [GenerationStage] {
-        useServer ? GenerationStage.allCases : [.read, .concept, .review, .sculpt, .package]
+        useServer ? GenerationStage.allCases : [.read, .concept, .sculpt, .package]
     }
 
     init() {

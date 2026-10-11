@@ -36,7 +36,7 @@ actor OnDeviceEngine: CharacterBackend {
     // Measured on a real drawing: meshy-6-lite from the three concept views
     // builds the model in ~55 s (vs ~6 min for "latest" with remesh and PBR)
     // with the same look on a phone, so a character takes under 2 minutes.
-    private let imageModel = "nano-banana-pro"
+    private let imageModel = "nano-banana-2" // 16 s for 3 views vs 35 s for -pro, and more faithful
     private let meshModel = "meshy-6-lite"
 
     private struct Work {
@@ -55,7 +55,21 @@ actor OnDeviceEngine: CharacterBackend {
     private var running: [String: Task<Void, Never>] = [:]
     private let library = LocalLibrary()
 
-    private static let weights: [GenerationStage: Double] = [.read: 0.08, .concept: 0.17, .review: 0.05, .sculpt: 0.6, .package: 0.1]
+    private static let weights: [GenerationStage: Double] = [.read: 0.05, .concept: 0.3, .sculpt: 0.55, .package: 0.1]
+
+    /// The concept prompt. It doesn't wait for Claude: the image model sees the
+    /// drawing itself, and this tells it how to render that faithfully.
+    static func conceptPrompt(hint: String) -> String {
+        var p = """
+        Turn this drawing into a polished, stylized 3D toy character render of exactly this character: \
+        keep its silhouette, proportions (a big head stays big), face, number and shape of limbs, \
+        accessories and colors; don't redesign or realistify it. An uncolored pencil drawing becomes a \
+        clean white or cream figure with its lines as dark details. Full body in frame, facing the viewer, \
+        natural standing pose with limbs apart, plain white background, soft studio light, no text.
+        """
+        if !hint.isEmpty { p += " The artist says: \(hint.prefix(200))" }
+        return String(p.prefix(800))
+    }
 
     // MARK: CharacterBackend
 
@@ -133,23 +147,12 @@ actor OnDeviceEngine: CharacterBackend {
             guard var w = work[id] else { return }
             let drawingURI = "data:image/jpeg;base64," + w.jpeg.base64EncodedString()
 
-            // 1. Claude reads the drawing.
-            if !w.done.contains(.read) {
-                enter(id, .read)
-                let sheet = try await director.readDrawing(jpeg: w.jpeg, hint: w.hint)
-                guard sheet.is_character else {
-                    throw CharacterAPI.ServerError(message: sheet.reject_reason.isEmpty
-                        ? "That doesn't look like a character yet. Try drawing a figure." : sheet.reject_reason)
-                }
-                w.sheet = sheet
-                w.done.insert(.read)
-                work[id] = w
-                jobs[id]?.character = CharacterInfo(
-                    name: sheet.name, summary: sheet.summary, greeting: sheet.greeting, bodyPlan: sheet.body_plan,
-                    heightMeters: sheet.height_m, figureBox: sheet.figure_box, colors: sheet.colors,
-                    personality: sheet.personality)
-            }
-            guard let sheet = w.sheet else { return }
+            // 1. Claude reads the drawing while Meshy is already painting the
+            //    concept from the drawing itself: neither waits for the other.
+            enter(id, .read)
+            let jpeg = w.jpeg, hint = w.hint
+            let reading: Task<ClaudeDirector.Sheet, Error>? = w.sheet == nil
+                ? Task { try await director.readDrawing(jpeg: jpeg, hint: hint) } : nil
 
             // 2. Paint a clean concept: front, side and back views of the same design.
             func paint(_ prompt: String) async throws {
@@ -177,31 +180,43 @@ actor OnDeviceEngine: CharacterBackend {
             }
             if !w.done.contains(.concept) {
                 enter(id, .concept)
-                try await paint(sheet.concept_prompt)
+                try await paint(Self.conceptPrompt(hint: hint))
                 w.done.insert(.concept)
                 work[id] = w
             }
 
-            // 3. Claude checks the concept against the drawing; one repaint if it drifted.
-            if !w.done.contains(.review) {
-                enter(id, .review)
+            if let reading {
+                let sheet = try await reading.value
+                guard sheet.is_character else {
+                    throw CharacterAPI.ServerError(message: sheet.reject_reason.isEmpty
+                        ? "That doesn't look like a character yet. Try drawing a figure." : sheet.reject_reason)
+                }
+                w.sheet = sheet
+                work[id] = w
+                jobs[id]?.character = CharacterInfo(
+                    name: sheet.name, summary: sheet.summary, greeting: sheet.greeting, bodyPlan: sheet.body_plan,
+                    heightMeters: sheet.height_m, figureBox: sheet.figure_box, colors: sheet.colors,
+                    personality: sheet.personality)
+            }
+            w.done.insert(.read)
+            work[id] = w
+            guard let sheet = w.sheet else { return }
+
+            // 3. Claude picks the front view for the reveal, alongside the build.
+            if !w.reviewed {
+                w.reviewed = true
+                work[id] = w
                 let views = (0..<max(1, w.conceptViews)).compactMap { i -> (data: Data, type: String)? in
                     guard let d = try? Data(contentsOf: folder.appending(path: "view-\(i).png")) else { return nil }
                     return (d, Self.imageType(d))
                 }
-                if !w.reviewed, !views.isEmpty {
-                    w.reviewed = true
-                    work[id] = w
-                    if let review = try? await director.reviewConcept(drawing: w.jpeg, views: views, sheet: sheet) {
-                        showView(id, review.front_index)
-                        if !review.faithful, !review.revised_prompt.isEmpty {
-                            progress(id, 0.3)
-                            try await paint(String(review.revised_prompt.prefix(800)))
+                if views.count > 1 {
+                    Task {
+                        if let review = try? await director.reviewConcept(drawing: jpeg, views: views, sheet: sheet) {
+                            self.showView(id, review.front_index)
                         }
                     }
                 }
-                w.done.insert(.review)
-                work[id] = w
             }
 
             // 4. Sculpt the textured 3D model from the concept views.

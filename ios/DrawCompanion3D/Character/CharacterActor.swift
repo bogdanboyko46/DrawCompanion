@@ -230,6 +230,15 @@ final class CharacterActor {
     }
 
     /// World position just above the head, for the speech bubble.
+    /// Points level with the face just past each side of the character, as
+    /// seen from the camera, so a speech bubble can sit beside it.
+    func faceSidePoints(cameraRight: SIMD3<Float>) -> (left: SIMD3<Float>, right: SIMD3<Float>) {
+        let s = root.scale.x
+        let face = anchor.convert(position: root.position + [0, height * s * 0.75, 0], to: nil)
+        let offset = cameraRight * (height * s * 0.45 + 0.015)
+        return (face - offset, face + offset)
+    }
+
     var headWorldPosition: SIMD3<Float> {
         anchor.convert(position: root.position + [0, height * root.scale.y * 1.08, 0], to: nil)
     }

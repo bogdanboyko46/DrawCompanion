@@ -82,7 +82,7 @@ struct GenerationCard: View {
     private func remaining(at date: Date) -> String {
         let spent = date.timeIntervalSince(started)
         let p = max(0.02, model.job?.progress ?? 0)
-        let typical = model.useServer ? 300.0 : 110.0
+        let typical = model.useServer ? 300.0 : 85.0
         let implied = spent / p
         let total = p < 0.3 ? typical : (typical + implied) / 2
         let left = max(10, total - spent)

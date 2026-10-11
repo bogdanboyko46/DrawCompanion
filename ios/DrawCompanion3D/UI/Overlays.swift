@@ -51,7 +51,14 @@ private struct Brackets: Shape {
     }
 }
 
-/// Speech bubbles that follow each character's head.
+/// Where a speech bubble attaches: a point beside the character's face, and
+/// which side of the character it's on.
+struct BubbleSpot: Equatable {
+    var point: CGPoint
+    var onRight: Bool
+}
+
+/// Speech bubbles that follow each character, beside its face (never over it).
 struct SpeechLayer: View {
     // Reads the model itself so 30 Hz head updates only re-render this layer.
     @Environment(AppModel.self) private var model
@@ -61,11 +68,13 @@ struct SpeechLayer: View {
         let heads = model.heads
         GeometryReader { _ in
             ForEach(lines) { line in
-                if let p = heads[line.characterID] {
-                    SpeechBubble(name: line.name, text: line.text)
+                if let spot = heads[line.characterID] {
+                    SpeechBubble(name: line.name, text: line.text, pointsLeft: spot.onRight)
                         .fixedSize()
-                        .position(x: p.x, y: p.y - 34)
-                        .transition(.scale(scale: 0.6, anchor: .bottom).combined(with: .opacity))
+                        // A zero-size frame pins the bubble's near edge to the spot.
+                        .frame(width: 0, height: 0, alignment: spot.onRight ? .leading : .trailing)
+                        .position(spot.point)
+                        .transition(.scale(scale: 0.6, anchor: spot.onRight ? .leading : .trailing).combined(with: .opacity))
                 }
             }
         }
@@ -76,6 +85,8 @@ struct SpeechLayer: View {
 struct SpeechBubble: View {
     var name: String
     var text: String
+    /// The pointer faces the character: left when the bubble is on its right.
+    var pointsLeft = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -88,8 +99,11 @@ struct SpeechBubble: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(.white, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(alignment: .bottom) {
-            Triangle().fill(.white).frame(width: 14, height: 8).offset(y: 7)
+        .frame(maxWidth: 220, alignment: .leading)
+        .overlay(alignment: pointsLeft ? .leading : .trailing) {
+            Triangle().fill(.white).frame(width: 14, height: 8)
+                .rotationEffect(.degrees(pointsLeft ? 90 : -90))
+                .offset(x: pointsLeft ? -10 : 10)
         }
         .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
     }

@@ -15,7 +15,7 @@ final class SceneController: NSObject, ARSessionDelegate {
     private var lastOverlay: TimeInterval = 0
 
     /// Called ~30×/s with where each speaking character's head is on screen.
-    var onHeadPositions: (([String: CGPoint]) -> Void)?
+    var onHeadPositions: (([String: BubbleSpot]) -> Void)?
     var onSpeak: ((CharacterActor, String) -> Void)?
 
     override init() {
@@ -252,9 +252,16 @@ final class SceneController: NSObject, ARSessionDelegate {
         lastOverlay += dt
         if lastOverlay > 1.0 / 30, let onHeadPositions {
             lastOverlay = 0
-            var heads: [String: CGPoint] = [:]
+            var heads: [String: BubbleSpot] = [:]
+            let right = arView.cameraTransform.rotation.act([1, 0, 0])
             for character in actors {
-                if let p = arView.project(character.headWorldPosition) { heads[character.job.id] = p }
+                let sides = character.faceSidePoints(cameraRight: right)
+                // Beside the face on the right, or on the left if there's no room.
+                if let r = arView.project(sides.right), r.x + 220 < arView.bounds.width {
+                    heads[character.job.id] = BubbleSpot(point: r, onRight: true)
+                } else if let l = arView.project(sides.left) {
+                    heads[character.job.id] = BubbleSpot(point: l, onRight: false)
+                }
             }
             onHeadPositions(heads)
         }
