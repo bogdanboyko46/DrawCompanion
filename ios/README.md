@@ -35,6 +35,7 @@ Once it's alive:
 - **Tap the character:** it reacts with a jump, a wave, or a line.
 - **Tap the table:** it turns, then walks over. It won't walk off the edge of the desk.
 - **Pinch:** resize it.
+- **Hold the mic button and talk:** it answers in its own voice (Claude, 1–2 short sentences). Speech is recognized on the phone when it can be. It speaks every line aloud, pitched to its size and personality.
 - **Walk up to it:** friendly characters wave when you get close. Shy ones don't.
 - **Camera / record buttons:** take a photo or record a video to share.
 - **Grid button:** every character you've made. Tap one to bring it back.

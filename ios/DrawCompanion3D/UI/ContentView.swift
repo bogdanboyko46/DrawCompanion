@@ -41,6 +41,10 @@ struct ContentView: View {
         VStack(spacing: 12) {
             TopBar()
             Spacer()
+            if model.phase == .alive {
+                TalkButton()
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
             if let error = model.errorMessage {
                 ErrorBanner(message: error)
                     .transition(.move(edge: .bottom).combined(with: .opacity))

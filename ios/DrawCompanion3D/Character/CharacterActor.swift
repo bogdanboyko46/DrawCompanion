@@ -180,6 +180,33 @@ final class CharacterActor {
         _ = play("walk")
     }
 
+    // MARK: Conversation
+
+    /// Until when it stays put and faces you, because you're talking to it.
+    private var attentiveUntil: TimeInterval = 0
+
+    /// Being spoken to: stop, turn to the user, and don't wander off.
+    func listen() {
+        attentiveUntil = time + 30
+        lastGreet = time
+        if case .walking = state {
+            target = nil
+            enterIdle()
+        }
+    }
+
+    /// Mulls over what it heard while the reply is on its way.
+    func ponder() {
+        attentiveUntil = time + 30
+        perform(clips["think"] != nil ? "think" : "greet") // static models: a head-tilt wobble
+    }
+
+    /// Answers out loud, then gets back to its own business a little later.
+    func answer(_ line: String) {
+        attentiveUntil = time + 6
+        onSpeak?(self, line)
+    }
+
     // MARK: Brain
 
     func update(deltaTime dt: TimeInterval, cameraPosition: SIMD3<Float>) {
@@ -197,8 +224,10 @@ final class CharacterActor {
             if time >= performUntil { enterIdle() }
 
         case .idle:
-            // Keep half an eye on you.
-            if camDistance < 1.6 { desiredYaw = atan2(toCam.x, toCam.y) }
+            // Keep half an eye on you (both while you're talking to it).
+            let attentive = time < attentiveUntil
+            if camDistance < 1.6 || attentive { desiredYaw = atan2(toCam.x, toCam.y) }
+            if attentive { break }
             let approached = camDistance < 0.45 * Float(root.scale.x) + 0.15
             if approached, personality.friendliness > 0.4, time - lastGreet > 25 {
                 greet()

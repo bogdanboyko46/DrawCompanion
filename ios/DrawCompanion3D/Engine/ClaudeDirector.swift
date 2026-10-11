@@ -79,7 +79,8 @@ struct ClaudeDirector {
         ["type": "image", "source": ["type": "base64", "media_type": mediaType, "data": data.base64EncodedString()]]
     }
 
-    private func call<T: Decodable>(system: String, content: [[String: Any]], schema: [String: Any], effort: String) async throws -> T {
+    /// Internal so extensions (ClaudeDirector+Chat) can make their own calls.
+    func call<T: Decodable>(system: String, content: [[String: Any]], schema: [String: Any], effort: String) async throws -> T {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 16000,
