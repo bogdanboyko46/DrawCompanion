@@ -1,6 +1,7 @@
 {
   "_doc": "Hand-labeled from eval/photos (paper units: page 1000 wide, origin top-left). Boxes are [x0, y0, x1, y1]. See eval/README.md.",
   "pages": {
+    "page-4": { "photo": "photos/page-4.jpg", "paper": { "w": 1000, "h": 631 }, "note": "real phone capture 2026-10-11: two figures, scribbled shoes", "parts": { "middle figure": [150, 0, 420, 420], "right figure": [740, 0, 950, 260] } },
     "page-1": {
       "photo": "photos/page-1.jpg", "paper": { "w": 1000, "h": 465 }, "note": "dim, grey-yellow light",
       "parts": {
@@ -42,6 +43,8 @@
     { "id": "p1-speech", "page": "page-1", "said": ["add a speech bubble where he says hi"], "target": [[0, 0, 1000, 465]], "avoid": "all" },
     { "id": "p2-cloud-above", "page": "page-2", "said": ["draw a cloud above him"], "target": [[250, 0, 680, 60]], "avoid": ["head", "eyes", "smile", "left ear", "right ear"] },
     { "id": "p2-dog-beside", "page": "page-2", "said": ["add a dog next to him"], "target": [[0, 60, 285, 444], [580, 60, 1000, 444]], "avoid": "all" },
+    { "id": "p4-similar-left", "page": "page-4", "said": ["Draw a character very similar to the middle one on the left side of the paper"], "target": [[0, 0, 200, 631]], "avoid": ["middle figure"] },
+    { "id": "p4-ball-foot", "page": "page-4", "said": ["draw a soccer ball at the long foot"], "target": [[80, 330, 420, 520]], "avoid": ["middle figure"] },
     { "id": "p2-cat-beside", "page": "page-2", "said": ["can you draw a cat next to him"], "target": [[0, 60, 285, 444], [580, 60, 1000, 444]], "avoid": "all" },
     { "id": "p1-bike-right", "page": "page-1", "said": ["add a bicycle on the right"], "target": [[600, 0, 1000, 465]], "avoid": "all" },
     { "id": "p2-grass", "page": "page-2", "said": ["put some grass under his feet"], "target": [[300, 225, 620, 330]], "avoid": ["head", "smile", "eyes", "left ear", "right ear"] },

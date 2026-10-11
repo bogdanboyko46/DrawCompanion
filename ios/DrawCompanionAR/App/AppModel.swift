@@ -116,6 +116,7 @@ final class AppModel: ObservableObject {
         alignTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.alignStep() }
         }
+        checkUpgradeServer()
     }
 
     func refreshKey() {
@@ -272,6 +273,19 @@ final class AppModel: ObservableObject {
 
     // MARK: upgrade (image model on the Mac)
 
+    /// Reaches the Mac's drawing server once at launch, so iOS asks for
+    /// local-network access right away (not in the middle of a drawing), and
+    /// the log says whether refining can work at all.
+    private func checkUpgradeServer() {
+        guard AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL?.appendingPathComponent("health") else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        URLSession.shared.dataTask(with: req) { data, _, error in
+            let reply = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            print("[DC] refine server \(url.absoluteString): \(error.map { "unreachable (\($0.localizedDescription))" } ?? "ok \(reply)")")
+        }.resume()
+    }
+
     /// Asks the Mac's drawing server for a nicer version of the outline just
     /// drawn. It swaps in only if this outline is still up and you haven't
     /// started tracing it; otherwise Claude's outline simply stays.
@@ -284,6 +298,7 @@ final class AppModel: ObservableObject {
         let id = String(format: "%04d", turnID)
         let t0 = CACurrentMediaTime()
         refining = true
+        print("[DC] upgrade: asking \(url.absoluteString) for \(said)")
         upgradeTask = Task { [weak self] in
             let result: [Stroke]?
             do {
@@ -374,6 +389,7 @@ final class AppModel: ObservableObject {
 
     private func tick() {
         let now = CACurrentMediaTime()
+        debugTick(now)
         pageFound = ar.corners != nil && ar.trackingNormal
         if !pageFound {
             let hint: String
@@ -452,6 +468,7 @@ final class AppModel: ObservableObject {
         let pixelBuffer = frame.capturedImage
         let prior = correction
         let version = ar.version
+        let base = ar.corners
         let (w, h) = (aligner.width, aligner.height)
         let dump = !dumpedAlignImages
         dumpedAlignImages = true
@@ -479,7 +496,7 @@ final class AppModel: ObservableObject {
                         self.pendingJump = nil
                         self.correction = found
                         print(String(format: "[DC] align: jump %.0f px confirmed", jump))
-                        self.repinToDrawing()
+                        self.repinToDrawing(from: base)
                     } else {
                         self.pendingJump = found
                         print(String(format: "[DC] align: jump %.0f px held for confirmation", jump))
@@ -499,7 +516,7 @@ final class AppModel: ObservableObject {
                 self.lastReading = nil
                 print(String(format: "[DC] align: move %.1f px  shift %.1f,%.1f  scale %.3f  rot %.3f", jump, found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
                 self.correction = previous.blended(toward: found, by: 0.5)
-                self.repinToDrawing()
+                self.repinToDrawing(from: base)
             }
         }
     }
@@ -521,13 +538,14 @@ final class AppModel: ObservableObject {
     /// Moves ARKit's page so the drawing sits exactly where it was measured,
     /// then starts the correction over from zero. Without this, ARKit's own
     /// error builds up as the phone moves and the correction has to chase it.
-    private func repinToDrawing() {
-        guard let map = referenceToCurrent else { return }
+    /// `base`: the page corners the reading was measured against (the outline
+    /// may have glided on since); the correction applies to those.
+    private func repinToDrawing(from base: [SIMD3<Float>]?) {
+        guard let map = referenceToCurrent, let base, base.count == 4 else { return }
         let paper = ar.paper
         let cornersNow = [PaperPoint(x: 0, y: 0), PaperPoint(x: paper.w, y: 0),
                           PaperPoint(x: paper.w, y: paper.h), PaperPoint(x: 0, y: paper.h)]
-        let moved = cornersNow.compactMap { ar.world(map.apply($0)) }
-        guard moved.count == 4 else { return }
+        let moved = cornersNow.map { ARController.world(map.apply($0), corners: base, paper: paper) }
         ar.repin(moved)
         ar.followDrawing = true
         lastLock = CACurrentMediaTime()
@@ -582,6 +600,64 @@ final class AppModel: ObservableObject {
         }
         return Renderer.Scene(headset: headset, strokes: strokes, style: outline?.style ?? .fallback,
                               progress: trackState?.strokes, fade: fade)
+    }
+
+    // MARK: debugging from the Mac (devicectl copies files in and out of Documents)
+
+    private var lastOverlay: TimeInterval = 0
+    private var overlayBusy = false
+
+    /// Documents/say.txt, pushed from the Mac, is treated as speech (then
+    /// deleted), so the whole flow can be tested without anyone talking.
+    /// While an outline is up, Documents/overlay.jpg shows the camera image
+    /// with the outline drawn where the screen draws it (same projection).
+    private func debugTick(_ now: TimeInterval) {
+        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let say = dir.appendingPathComponent("say.txt")
+            if let text = try? String(contentsOf: say, encoding: .utf8) {
+                try? FileManager.default.removeItem(at: say)
+                print("[DC] debug say: \(text)")
+                heard(text)
+            }
+        }
+        guard let outline, !outline.strokes.isEmpty, !overlayBusy, now - lastOverlay > 2,
+              let frame = ar.session.currentFrame else { return }
+        lastOverlay = now
+        let map = referenceToCurrent
+        let strokes: [[CGPoint]] = outline.strokes.map { s in
+            s.points.compactMap { p in
+                let q = map?.apply(p) ?? p
+                return ar.world(q).flatMap { ARController.project($0, camera: frame.camera) }
+            }
+        }
+        let style = outline.style
+        let image = CIImage(cvPixelBuffer: frame.capturedImage)
+        overlayBusy = true
+        alignQueue.async { [weak self] in
+            defer { DispatchQueue.main.async { self?.overlayBusy = false } }
+            let size = image.extent.size
+            guard let cg = CIContext().createCGImage(image, from: image.extent) else { return }
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: size.width / 2, height: size.height / 2))
+            let jpeg = renderer.jpegData(withCompressionQuality: 0.75) { ctx in
+                let g = ctx.cgContext
+                g.translateBy(x: 0, y: size.height / 2)
+                g.scaleBy(x: 0.5, y: -0.5)
+                g.draw(cg, in: CGRect(origin: .zero, size: size))
+                g.scaleBy(x: 1, y: -1)
+                g.translateBy(x: 0, y: -size.height)
+                g.setStrokeColor(UIColor.red.cgColor)
+                g.setLineWidth(3)
+                for pts in strokes where pts.count > 1 {
+                    g.move(to: pts[0]); pts.dropFirst().forEach { g.addLine(to: $0) }
+                }
+                g.strokePath()
+                let label = String(format: "ink rgb %.2f %.2f %.2f  width %.1f u", style.red, style.green, style.blue, style.width)
+                (label as NSString).draw(at: CGPoint(x: 20, y: 20), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 36), .foregroundColor: UIColor.yellow])
+            }
+            if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                try? jpeg.write(to: dir.appendingPathComponent("overlay.jpg"))
+            }
+        }
     }
 
     // MARK: problems (setup issues only; the AI itself never "says" anything)

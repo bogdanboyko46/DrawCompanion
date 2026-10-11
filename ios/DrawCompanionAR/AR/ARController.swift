@@ -89,6 +89,7 @@ final class ARController: NSObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         if case .normal = frame.camera.trackingState { trackingNormal = true } else { trackingNormal = false }
+        glide(frame.timestamp)
         watchForWave(frame)
         guard !detecting, frame.timestamp - lastDetectStart >= detectInterval else { return }
         detecting = true
@@ -286,13 +287,37 @@ final class ARController: NSObject, ARSessionDelegate {
 
     /// Moves the page to where the drawing was actually seen (from the drawing
     /// aligner). ARKit then carries this corrected position smoothly.
+    /// The outline glides there over ~0.1 s instead of jumping (corrections
+    /// several times a second made it twitch).
     func repin(_ next: [SIMD3<Float>]) {
         guard next.count == 4 else { return }
-        corners = next
+        if corners == nil { corners = next }
+        glideTarget = next
         version += 1
     }
 
+    /// Where `corners` is gliding to, after a correction.
+    private var glideTarget: [SIMD3<Float>]?
+    private var lastGlide: TimeInterval = 0
+
+    private func glide(_ t: TimeInterval) {
+        defer { lastGlide = t }
+        guard let target = glideTarget, let current = corners else { return }
+        let k = Float(1 - exp(-max(0, min(0.1, t - lastGlide)) / 0.06))
+        let next = zip(current, target).map { $0 + ($1 - $0) * k }
+        if Self.spread(next, target) < 0.0002 { corners = target; glideTarget = nil } else { corners = next }
+    }
+
+    /// World position of a page point on the given corners (bilinear).
+    static func world(_ p: PaperPoint, corners c: [SIMD3<Float>], paper: PaperSize) -> SIMD3<Float> {
+        let u = Float(p.x / paper.w), v = Float(p.y / paper.h)
+        let top = c[0] + (c[1] - c[0]) * u
+        let bottom = c[3] + (c[2] - c[3]) * u
+        return top + (bottom - top) * v
+    }
+
     private func pin(_ next: [SIMD3<Float>]) {
+        glideTarget = nil
         corners = next
         version += 1
         candidate = nil
