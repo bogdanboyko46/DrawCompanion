@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Asks the drawing server on the Mac (eval/imagegen/server.py) for a nicer
@@ -10,7 +11,17 @@ import Foundation
 /// app then simply keeps Claude's outline.
 struct UpgradeClient {
     var baseURL: URL
+    /// The Claude API key: the server only works for whoever holds it.
+    var apiKey: String
     var session: URLSession = .shared
+
+    /// Shared secret sent with each request: SHA-256 of the API key, salted.
+    /// The server computes the same from the key on the Mac; nothing secret
+    /// has to be typed in or stored in the repo, and the key itself never
+    /// goes over the local network.
+    static func token(apiKey: String) -> String {
+        SHA256.hash(data: Data(("drawcompanion-upgrade:" + apiKey).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 
     struct Response: Decodable {
         struct Path: Decodable {
@@ -30,6 +41,7 @@ struct UpgradeClient {
         req.httpMethod = "POST"
         req.timeoutInterval = 45
         req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(Self.token(apiKey: apiKey), forHTTPHeaderField: "X-DC-Token")
         let body: [String: Any] = [
             "page_jpeg": page.base64EncodedString(),
             "paper": ["w": paper.w, "h": paper.h],

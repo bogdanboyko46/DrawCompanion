@@ -24,3 +24,11 @@ final class UpgradeClientTests: XCTestCase {
         XCTAssertEqual(UpgradeClient.bounds(of: [s]), PaperRect(x: 10, y: 20, w: 80, h: 20))
     }
 }
+
+final class UpgradeTokenTests: XCTestCase {
+    // Must match eval/imagegen/server.py: sha256("drawcompanion-upgrade:" + key).
+    func testTokenMatchesServer() {
+        XCTAssertEqual(UpgradeClient.token(apiKey: "sk-test"),
+                       "d0317412277eeeb9d4dec80770260de0fdabf9fe97bfc91986685300187a8ab5")
+    }
+}

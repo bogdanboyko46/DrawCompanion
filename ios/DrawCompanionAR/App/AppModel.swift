@@ -262,7 +262,7 @@ final class AppModel: ObservableObject {
     private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
         upgradeTask?.cancel()
         refining = false
-        guard !usingMock, AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL,
+        guard !usingMock, AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL, let key = Keychain.apiKey,
               let strokes = outline?.strokes, let box = UpgradeClient.bounds(of: strokes) else { return }
         let revision = outlineRevision
         let id = String(format: "%04d", turnID)
@@ -271,7 +271,7 @@ final class AppModel: ObservableObject {
         upgradeTask = Task { [weak self] in
             let result: [Stroke]?
             do {
-                result = try await UpgradeClient(baseURL: url).upgrade(page: page, paper: paper, said: said, box: box, id: id)
+                result = try await UpgradeClient(baseURL: url, apiKey: key).upgrade(page: page, paper: paper, said: said, box: box, id: id)
             } catch {
                 print("[DC] upgrade failed: \(error.localizedDescription)")
                 result = nil
