@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshKey() {
-        usingMock = Keychain.apiKey == nil
+        usingMock = Keychain.apiKey == nil || UserDefaults.standard.bool(forKey: AppSettings.mockMode)
     }
 
     // MARK: listening
@@ -120,7 +120,7 @@ final class AppModel: ObservableObject {
     // MARK: turns
 
     private func makeBackend() -> TurnBackend {
-        if let key = Keychain.apiKey { return ClaudeBackend(client: ClaudeClient(config: .init(apiKey: key))) }
+        if !usingMock, let key = Keychain.apiKey { return ClaudeBackend(client: ClaudeClient(config: .init(apiKey: key))) }
         return MockBackend()
     }
 
