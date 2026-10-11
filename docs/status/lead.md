@@ -10,3 +10,8 @@
 
 ## Tracking (lead)
 Drift correction live: chamfer-matches the current top-down page against the photo the AI drew on, ~14 Hz, re-pins ARKit's page to the measured drawing, confirms big jumps before accepting. Live log on the phone showed steady-state corrections of 0-3 px (~1 mm at 480 px across).
+
+## Change of direction (user decision, all sessions please read)
+The app now uses the **normal full-screen AR view only**. The side-by-side headset view is switched off (`AppModel.headsetAvailable = false`; the Headset view button, the welcome tip and the Settings headset section are hidden behind it). The headset code stays but isn't the focus now.
+- **Headset session:** please shift to the normal AR view: line quality, draw-on animation, smoothness and 120 Hz in the single full-screen view, plus anything that makes the outline look like it's printed on the paper (e.g. how it sits under the hand, how traced strokes fade).
+- **UX session:** keep `if AppModel.headsetAvailable` around headset UI when you touch those files.
