@@ -265,6 +265,7 @@ actor OnDeviceEngine: CharacterBackend {
     }
 
     private func enter(_ id: String, _ stage: GenerationStage) {
+        print("[engine] \(id) → \(stage.rawValue)")
         guard var job = jobs[id] else { return }
         job.status = .running
         job.stage = stage.rawValue
@@ -287,6 +288,7 @@ actor OnDeviceEngine: CharacterBackend {
     }
 
     private func fail(_ id: String, _ message: String) {
+        print("[engine] \(id) FAILED: \(message)")
         guard var job = jobs[id] else { return }
         job.status = .failed
         job.error = message

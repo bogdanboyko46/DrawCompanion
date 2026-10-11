@@ -101,13 +101,17 @@ struct ClaudeDirector {
         for attempt in 0..<3 {
             if attempt > 0 { try await Task.sleep(for: .seconds(Double(2 << attempt))) }
             let data: Data, response: URLResponse
+            let sent = Date()
+            print("[claude] request \(request.httpBody?.count ?? 0) bytes, effort \(effort)")
             do {
                 (data, response) = try await URLSession.shared.data(for: request)
             } catch {
+                print("[claude] network error after \(Int(Date().timeIntervalSince(sent)))s: \(error.localizedDescription)")
                 lastError = error
                 continue
             }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[claude] HTTP \(status) in \(Int(Date().timeIntervalSince(sent)))s")
             if status == 429 || status >= 500 {
                 lastError = DirectorError(message: "Claude is busy (\(status)). Retrying…")
                 continue

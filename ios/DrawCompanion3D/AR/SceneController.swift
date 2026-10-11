@@ -71,7 +71,11 @@ final class SceneController: NSObject, ARSessionDelegate {
     /// to a square as seen on screen, finds the drawn figure in it, and measures
     /// where that frame sits on the surface in the room.
     func capturePage() async throws -> CapturedPage {
+        let started = Date()
+        func log(_ s: String) { print("[capture] \(String(format: "%.2f", Date().timeIntervalSince(started)))s \(s)") }
+        log("start")
         let frame = try await highResolutionFrame()
+        log("frame \(CVPixelBufferGetWidth(frame.capturedImage))x\(CVPixelBufferGetHeight(frame.capturedImage))")
         let viewport = arView.bounds.size
         let t = frame.displayTransform(for: interfaceOrientation, viewportSize: viewport).inverted()
         // View point -> camera image point in Vision's normalized space (origin bottom-left).
@@ -97,15 +101,18 @@ final class SceneController: NSObject, ARSessionDelegate {
             world = [center - x * h - z * h, center + x * h - z * h, center + x * h + z * h, center - x * h + z * h]
         }
         let (transform, size) = PageScanner.frame(from: world)
+        log("raycast measured=\(measured)")
 
         let result: (Data, CGImage)? = await withCheckedContinuation { c in
             detectQueue.async { c.resume(returning: PageScanner.rectify(buffer, page: region, aspect: 1)) }
         }
         guard let result else { throw CaptureError.noFrame }
         let (jpeg, image) = result
+        log("rectified \(image.width)x\(image.height)")
         let isolated = await withCheckedContinuation { (c: CheckedContinuation<PageScanner.Isolated?, Never>) in
             detectQueue.async { c.resume(returning: PageScanner.isolate(image)) }
         }
+        log("isolated: \(isolated.map { "figure \($0.figure.width)x\($0.figure.height) box \($0.box)" } ?? "none")")
         return CapturedPage(jpeg: jpeg, image: image, cutout: isolated?.cutout, figureJPEG: isolated?.figureJPEG, worldCorners: world,
                             transform: transform, size: size, measured: measured)
     }

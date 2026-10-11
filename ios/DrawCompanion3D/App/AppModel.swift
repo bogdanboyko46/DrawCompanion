@@ -103,12 +103,17 @@ final class AppModel {
         page = captured
         drawingImage = UIImage(cgImage: captured.image)
         conceptImage = nil
+        print("[make] portal")
         scene.beginPortal(for: captured)
+        print("[make] portal shown; creating job")
         phase = .making
 
         do {
             let job = try await backend.create(jpeg: captured.figureJPEG ?? captured.jpeg, hint: hint)
             self.job = job
+            print("[make] job \(job.id) created")
+            // Keep the raw frame next to the job for debugging the scanner.
+            try? captured.jpeg.write(to: local.folder(job.id).appending(path: "capture.jpg"))
             try await follow(job)
         } catch {
             scene.cancelPortal()

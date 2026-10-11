@@ -161,7 +161,7 @@ enum PageScanner {
     /// shadows, specks, writing, and other doodles. Strokes that are close
     /// together (a stick arm next to a body) count as one figure.
     static func isolate(_ image: CGImage) -> Isolated? {
-        let source = CIImage(cgImage: image)
+        let source = flattened(CIImage(cgImage: image))
         let e = source.extent
         let drawn = drawnMask(source, image)
 
@@ -178,9 +178,19 @@ enum PageScanner {
                          format: .RGBA8, colorSpace: nil)
         // Ignore a thin band at the page edge: that's where paper edges, table and shadow show up.
         let border = max(3, gw * 45 / 1000)
+        // What counts as ink is relative to this drawing's own strongest strokes:
+        // writing showing through from the back of the page, smudges and paper
+        // texture are much fainter than the lines someone actually drew.
+        var levels: [UInt8] = []
+        for y in border..<(gh - border) {
+            for x in border..<(gw - border) where px[(y * gw + x) * 4] > 40 { levels.append(px[(y * gw + x) * 4]) }
+        }
+        levels.sort()
+        let strong = levels.isEmpty ? 255 : Int(levels[min(levels.count - 1, levels.count * 95 / 100)])
+        let threshold = UInt8(max(70, min(200, strong / 2)))
         var ink = [Bool](repeating: false, count: gw * gh)
         for y in border..<(gh - border) {
-            for x in border..<(gw - border) where px[(y * gw + x) * 4] > 70 { ink[y * gw + x] = true }
+            for x in border..<(gw - border) where px[(y * gw + x) * 4] > threshold { ink[y * gw + x] = true }
         }
         // Bridge small gaps so a figure drawn with separate strokes stays one shape.
         let reach = 2
@@ -322,6 +332,28 @@ enum PageScanner {
                   options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.9])
         else { return nil }
         return Isolated(cutout: cutout, figure: figure, figureJPEG: jpeg, box: box)
+    }
+
+    /// The image divided by its own paper brightness, so blank paper becomes
+    /// pure white everywhere (shadows, lamp falloff and gray paper included)
+    /// while drawn marks keep their contrast.
+    static func flattened(_ image: CIImage) -> CIImage {
+        let e = image.extent
+        let radius = Float(max(4, min(e.width, e.height) * 0.02))
+        // Closing erases strokes, leaving the paper's own brightness.
+        let grow = CIFilter.morphologyMaximum()
+        grow.inputImage = image.clampedToExtent()
+        grow.radius = radius
+        let shrink = CIFilter.morphologyMinimum()
+        shrink.inputImage = grow.outputImage
+        shrink.radius = radius
+        guard let paper = shrink.outputImage?.applyingGaussianBlur(sigma: Double(radius)).cropped(to: e) else { return image }
+        let divide = CIFilter.divideBlendMode() // background / input
+        divide.inputImage = paper
+        divide.backgroundImage = image
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = divide.outputImage
+        return (clamp.outputImage ?? image).cropped(to: e)
     }
 
     /// What counts as drawn. Interiors (a white face inside its outline) are
