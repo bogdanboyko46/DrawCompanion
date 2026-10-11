@@ -191,6 +191,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = DrawCompanion;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DrawCompanion uses the camera to see your paper and draw outlines on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DrawCompanion listens for what you'd like drawn.";
@@ -221,6 +222,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = DrawCompanion;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DrawCompanion uses the camera to see your paper and draw outlines on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DrawCompanion listens for what you'd like drawn.";

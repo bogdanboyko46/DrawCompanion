@@ -20,7 +20,17 @@ final class AppModel: ObservableObject {
     private let speech = SpeechListener()
 
     // The outline and how far it's been traced.
-    private var outline: Outline? { didSet { hasOutline = outline != nil; ar.lockPaperSize = outline != nil } }
+    private var outline: Outline? {
+        didSet {
+            hasOutline = outline != nil
+            ar.lockPaperSize = outline != nil
+            outlineRevision += 1
+        }
+    }
+    private var outlineRevision = 0
+    /// Strokes moved by the drift correction, rebuilt only when the outline or
+    /// the correction changes (not on every rendered frame).
+    private var mappedStrokes: (revision: Int, map: Affine2?, strokes: [Stroke])?
     private var tracker: CompletionTracker?
 
     // Drift correction: keeps the outline on the actual pencil lines. The
@@ -351,9 +361,15 @@ final class AppModel: ObservableObject {
 
     func scene() -> Renderer.Scene {
         let fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
-        var strokes = outline?.strokes ?? []
-        if let map = referenceToCurrent {
-            strokes = strokes.map { var s = $0; s.points = s.points.map(map.apply); return s }
+        let map = referenceToCurrent
+        let strokes: [Stroke]
+        if let cached = mappedStrokes, cached.revision == outlineRevision, cached.map == map {
+            strokes = cached.strokes
+        } else {
+            var fresh = outline?.strokes ?? []
+            if let map { fresh = fresh.map { var s = $0; s.points = s.points.map(map.apply); return s } }
+            mappedStrokes = (outlineRevision, map, fresh)
+            strokes = fresh
         }
         return Renderer.Scene(headset: headset, strokes: strokes, style: outline?.style ?? .fallback,
                               progress: trackState?.strokes, fade: fade)
