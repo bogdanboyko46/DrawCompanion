@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Everything happens in AR: no buttons. The camera view carries only the scan
 /// frame, speech bubbles, a gesture flash, and one status pill that says what
-/// to do next (snap, clap, shhh…).
+/// to do next (snap, clap, talk…).
 struct ContentView: View {
     @Environment(AppModel.self) private var model
 

@@ -12,6 +12,11 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
     private var speakers: [ObjectIdentifier: String] = [:] // utterance → character id
     private var current: ObjectIdentifier?
     private var profiles: [String: VoiceProfile] = [:]
+    private var lastSound = Date.distantPast
+
+    /// A character is talking, or just stopped (the room still rings a moment):
+    /// the mic shouldn't take that for you.
+    var isBusy: Bool { synthesizer.isSpeaking || !speakers.isEmpty || Date().timeIntervalSince(lastSound) < 0.6 }
 
     override private init() {
         super.init()
@@ -43,11 +48,13 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
         synthesizer.stopSpeaking(at: .immediate)
         speakers.removeAll()
         current = nil
+        lastSound = Date()
     }
 
     private func finished(_ id: ObjectIdentifier) {
         speakers[id] = nil
         if current == id { current = nil }
+        lastSound = Date()
         if speakers.isEmpty { AudioRoute.rest() }
     }
 

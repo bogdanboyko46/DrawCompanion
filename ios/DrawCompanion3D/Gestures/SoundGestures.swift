@@ -6,14 +6,16 @@ import Speech
 /// a "shhh" (a steady hiss, detected directly: the classifier has no shush),
 /// so the app can be driven hands-free in AR.
 ///
-/// Runs its own audio engine on the mic. It pauses while you're talking to a
-/// character (speech recognition needs the mic then) and resumes afterwards.
+/// Runs the app's one audio engine on the mic. The same audio also feeds
+/// `speech`, so talking to a character never has to stop the gestures.
 @MainActor
 final class SoundGestures {
     enum Sound { case snap, clap, shush }
 
     var onSound: ((Sound) -> Void)?
     private(set) var running = false
+    /// Speech recognition taps the mic through this.
+    let speech = SpeechSink()
 
     private let engine = AVAudioEngine()
     private var analyzer: SNAudioStreamAnalyzer?
@@ -68,8 +70,10 @@ final class SoundGestures {
             self.analyzer = analyzer
             let queue = self.queue
             let hiss = HissDetector()
+            let speech = self.speech
             hiss.onShush = { [weak self] in Task { @MainActor in self?.heard(.shush, 1) } }
             input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
+                speech.append(buffer)
                 queue.async {
                     analyzer.analyze(buffer, atAudioFramePosition: when.sampleTime)
                     hiss.feed(buffer)
@@ -134,6 +138,22 @@ final class SoundGestures {
         func request(_ request: SNRequest, didFailWithError error: Error) {
             print("[sound] analysis failed: \(error.localizedDescription)")
         }
+    }
+}
+
+/// Hands mic audio to whichever speech recognition request is current (if
+/// any). Called from the audio thread.
+final class SpeechSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func attach(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock(); self.request = request; lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); let request = self.request; lock.unlock()
+        request?.append(buffer)
     }
 }
 

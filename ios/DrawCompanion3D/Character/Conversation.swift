@@ -3,8 +3,10 @@ import Observation
 import Speech
 import UIKit
 
-/// Hold-to-talk with a character: on-device speech recognition while the
-/// you've said "shhh", then Claude answers in the character's voice.
+/// Always listening: whenever a character is out in the room you just talk,
+/// and after a short pause it answers in its own voice (Claude writes the
+/// line). The mic is ignored while a character speaks so it doesn't hear
+/// itself; "shhh" cuts it off.
 @MainActor
 @Observable
 final class Conversation {
@@ -18,87 +20,116 @@ final class Conversation {
 
     @ObservationIgnored private var histories: [String: [ChatTurn]] = [:]
     @ObservationIgnored private let recognizer = SFSpeechRecognizer() ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    @ObservationIgnored private let engine = AVAudioEngine()
+    @ObservationIgnored private var sink: SpeechSink?
     @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
     @ObservationIgnored private var recognition: SFSpeechRecognitionTask?
+    @ObservationIgnored private var heard = ""
+    @ObservationIgnored private var heardAt = Date()
     @ObservationIgnored private var heardFinal = false
+    @ObservationIgnored private var startedAt = Date()
     @ObservationIgnored private var listener: CharacterActor?
     @ObservationIgnored private var captionClear: Task<Void, Never>?
+    @ObservationIgnored private var loop: Task<Void, Never>?
+    @ObservationIgnored private weak var scene: SceneController?
+    /// Bumped by "shhh": a reply still on its way is dropped.
+    @ObservationIgnored private var turn = 0
+    @ObservationIgnored private var askedPermission = false
 
     /// Turns kept per character and sent with each question.
     private let historyLength = 6
+    /// Quiet after your last word that ends what you're saying.
+    private let endOfSentence: TimeInterval = 1.3
 
-    // MARK: Button
+    // MARK: Always on
 
-    func press(in scene: SceneController) {
-        guard state == .idle else { return }
-        guard permitted(then: { [weak self, weak scene] in
-            // Granted just now: carry on listening rather than making them ask again.
-            if let self, let scene { self.press(in: scene) }
-        }) else { print("[talk] waiting for permission"); return }
-        guard let character = Self.facing(in: scene) else { print("[talk] nobody to talk to"); return }
-        guard let recognizer, recognizer.isAvailable else {
-            return note("Speech recognition isn't available right now. Try again in a moment.")
+    /// Listens for the rest of the app's life, whenever `canTalk` says someone's there.
+    func start(in scene: SceneController, hearing sink: SpeechSink, canTalk: @escaping @MainActor () -> Bool) {
+        self.sink = sink
+        self.scene = scene
+        loop?.cancel()
+        loop = Task { [weak self, weak scene] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard let self, let scene else { return }
+                self.tick(scene, canTalk: canTalk())
+            }
         }
-
-        CharacterVoice.shared.stop()
-        listener = character
-        character.listen()
-        do {
-            try startRecognizing(with: recognizer)
-        } catch {
-            print("[talk] couldn't start listening: \(error.localizedDescription)")
-            stopAudio()
-            return note("The microphone couldn't start. Try again in a moment.")
-        }
-        captionClear?.cancel()
-        needsSettings = false
-        caption = ""
-        state = .listening
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
-    func release() {
-        guard state == .listening else { return }
-        state = .thinking
-        request?.endAudio()
-        stopAudio()
-        Task { await finish() }
+    /// "Shhh": the character stops talking (and forgets what it was about to say).
+    func interrupt() {
+        turn += 1
+        CharacterVoice.shared.stop()
+        if state == .thinking { state = .idle }
+        // The hiss itself was probably half-heard as words.
+        stopRecognizing()
+        caption = ""
+    }
+
+    private func tick(_ scene: SceneController, canTalk: Bool) {
+        guard state != .thinking else { return }
+        let someone = canTalk && scene.actors.contains { $0.root.isEnabled }
+        guard someone, !CharacterVoice.shared.isBusy, permitted() else {
+            if state == .listening { stopRecognizing(); caption = "" }
+            return
+        }
+        guard state == .listening, request != nil else { return beginRecognizing() }
+
+        let said = heard.trimmingCharacters(in: .whitespacesAndNewlines)
+        if said.contains(where: \.isLetter) {
+            if heardFinal || Date().timeIntervalSince(heardAt) > endOfSentence {
+                stopRecognizing()
+                Task { await answer(said, in: scene) }
+            }
+        } else if heardFinal || Date().timeIntervalSince(startedAt) > 50 {
+            // Recognition gives up after a stretch of silence (and can't run
+            // past a minute): start a fresh one.
+            stopRecognizing()
+        }
     }
 
     // MARK: Listening
 
-    private func startRecognizing(with recognizer: SFSpeechRecognizer) throws {
-        try AudioRoute.startListening()
+    private func beginRecognizing() {
+        guard let recognizer, recognizer.isAvailable, let sink else { return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
         // On-device keeps your voice on the phone, and it's faster.
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         self.request = request
+        heard = ""
         heardFinal = false
-
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw NSError(domain: "Conversation", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input"])
-        }
-        Self.tap(input, format: format, into: request)
-        engine.prepare()
-        try engine.start()
-
+        startedAt = Date()
+        heardAt = Date()
         recognition = Self.recognize(request, with: recognizer) { [weak self] text, final in
-            guard let self, self.request === request else { return }
-            if let text { self.caption = text }
+            guard let self, self.request === request, self.state == .listening else { return }
+            if let text, text != self.heard {
+                if self.heard.isEmpty, !text.isEmpty { self.attend() }
+                self.heard = text
+                self.heardAt = Date()
+                self.caption = text
+            }
             if final { self.heardFinal = true }
         }
+        sink.attach(request)
+        state = .listening
     }
 
-    // The audio tap and recognizer call back on their own queues; building the
-    // closures outside the main actor keeps them free of main-actor checks.
-    private nonisolated static func tap(_ input: AVAudioInputNode, format: AVAudioFormat, into request: SFSpeechAudioBufferRecognitionRequest) {
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+    private func stopRecognizing() {
+        sink?.attach(nil)
+        request?.endAudio()
+        recognition?.cancel()
+        recognition = nil
+        request = nil
+        if state == .listening { state = .idle }
+    }
+
+    /// Someone started talking: the character you're facing turns to listen.
+    private func attend() {
+        guard let scene, let character = Self.facing(in: scene) else { return }
+        listener = character
+        character.listen()
     }
 
     private nonisolated static func recognize(
@@ -112,32 +143,16 @@ final class Conversation {
         }
     }
 
-    private func stopAudio() {
-        if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
-        AudioRoute.stopListening()
-    }
-
     // MARK: Answering
 
-    private func finish() async {
-        // The last words are often still being recognized when you let go.
-        for _ in 0..<10 where !heardFinal {
-            try? await Task.sleep(for: .milliseconds(80))
-        }
-        recognition?.cancel()
-        recognition = nil
-        request = nil
-
-        let said = caption.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let character = listener, character.anchor.parent != nil else {
-            state = .idle
-            return clearCaption(after: 1)
-        }
-        guard !said.isEmpty else {
-            state = .idle
-            return note("I didn't catch that. Say shhh, then talk.")
-        }
+    private func answer(_ said: String, in scene: SceneController) async {
+        guard let character = Self.facing(in: scene) else { return clearCaption(after: 1) }
+        print("[talk] heard: \(said)")
+        listener = character
+        caption = said
+        state = .thinking
+        let myTurn = turn
+        character.listen()
         character.ponder()
 
         let id = character.job.id
@@ -149,10 +164,11 @@ final class Conversation {
         guard let key = Keys.value(Keys.anthropic) else {
             state = .idle
             character.answer(character.personality.friendliness < 0.4 ? "…hm?" : "Hmm? I can't talk yet!")
-            return note("Add your Anthropic API key in Settings so characters can talk back.")
+            return note("Add your Anthropic API key so characters can talk back.")
         }
         do {
             let reply = try await ClaudeDirector(apiKey: key).reply(to: said, as: info, history: history)
+            guard turn == myTurn else { return } // shushed meanwhile
             histories[id] = Array((history + [ChatTurn(fromUser: true, text: said), ChatTurn(fromUser: false, text: reply)])
                 .suffix(historyLength))
             state = .idle
@@ -161,6 +177,7 @@ final class Conversation {
             clearCaption(after: 1.5)
         } catch {
             print("[talk] reply failed: \(error.localizedDescription)")
+            guard turn == myTurn else { return }
             state = .idle
             character.answer("Hmm? Say that again?")
             note("Couldn't reach Claude: \(error.localizedDescription)")
@@ -184,12 +201,13 @@ final class Conversation {
 
     // MARK: Permissions
 
-    /// True if both are granted. Otherwise asks (first use) or explains, and
-    /// returns false: the alert breaks the hold, so the next press talks.
-    private func permitted(then granted: @escaping @MainActor () -> Void) -> Bool {
+    /// True if both are granted. Otherwise asks once (first use) or explains once.
+    private func permitted() -> Bool {
         let speech = SFSpeechRecognizer.authorizationStatus()
         let mic = AVAudioApplication.shared.recordPermission
         if speech == .authorized && mic == .granted { return true }
+        guard !askedPermission else { return false }
+        askedPermission = true
 
         if speech == .denied || speech == .restricted || mic == .denied {
             needsSettings = speech != .restricted
@@ -204,9 +222,7 @@ final class Conversation {
             let speechOK = speech == .authorized ? true : await withCheckedContinuation { c in
                 SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
             }
-            if micOK && speechOK {
-                granted()
-            } else {
+            if !(micOK && speechOK) {
                 needsSettings = true
                 note("No problem. To talk later, allow the microphone and speech recognition in Settings.", for: 6)
             }

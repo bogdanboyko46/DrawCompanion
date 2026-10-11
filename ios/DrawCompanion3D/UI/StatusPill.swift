@@ -43,7 +43,7 @@ struct StatusPill: View {
         case .ready:
             return "👏 Clap to bring \(name ?? "them") out of the paper"
         case .alive:
-            return "🤫 shhh to talk  ·  👉 point  ·  👍 cheer  ·  ✌️ photo  ·  🫰 new"
+            return "🗣️ just talk  ·  🤫 shhh  ·  👉 point  ·  👍 cheer  ·  ✌️ photo  ·  🫰 new"
         }
     }
 
@@ -67,7 +67,8 @@ struct TalkCaption: View {
         Group {
             switch talk.state {
             case .listening:
-                pill("🎙️ " + (talk.caption.isEmpty ? "Listening…" : talk.caption))
+                // Always listening: only show it once you're actually saying something.
+                if !talk.caption.isEmpty { pill("🎙️ " + talk.caption) }
             case .thinking:
                 pill("💭 " + (talk.caption.isEmpty ? "Thinking…" : talk.caption))
             case .idle:

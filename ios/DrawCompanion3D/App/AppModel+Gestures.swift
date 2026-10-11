@@ -4,7 +4,8 @@ import SwiftUI
 /// things with a gesture:
 ///
 ///   snap your fingers   scan the drawing in the frame and bring it to life
-///   say "shhh"           the character listens; talk, then pause and it answers
+///   just talk           the character answers (it's always listening)
+///   say "shhh"           the character stops talking
 ///   open palm           the characters wave hello
 ///   point at the table  the character walks there
 ///   thumbs up / clap    the characters cheer
@@ -20,28 +21,18 @@ extension AppModel {
             case .snap: self?.snapToScan()
             case .clap:
                 if self?.phase == .ready { self?.flash("👏"); self?.summon() } else { self?.cheer(flash: "👏") }
-            case .shush: self?.shushToTalk()
+            case .shush: self?.shush()
             }
         }
         hands.onBegan = { [weak self] pose in self?.handBegan(pose) }
         hands.onEnded = { [weak self] pose in self?.handEnded(pose) }
         hands.onPointing = { [weak self] tip in self?.pointed(at: tip) }
         sounds.start()
-    }
-
-    // MARK: Talking (shared by the mic button and the open palm)
-
-    func startTalking() {
-        guard talk.state == .idle else { return }
-        sounds.pause() // speech recognition needs the mic
-        talk.press(in: scene)
-        if talk.state != .listening { sounds.resume() }
-    }
-
-    func stopTalking() {
-        guard talk.state == .listening else { return }
-        talk.release()
-        sounds.resume()
+        // Anyone out in the room can be talked to, including a companion while a new one is made.
+        talk.start(in: scene, hearing: sounds.speech) { [weak self] in
+            guard let self else { return false }
+            return self.phase != .capturing && self.sounds.running
+        }
     }
 
     // MARK: Gestures
@@ -82,25 +73,11 @@ extension AppModel {
 
     private func handEnded(_ pose: HandGestures.Pose) {}
 
-    /// "Shhh" → the character listens. You talk; a pause of about 1.5 s after
-    /// your last word sends it (or 6 s of nothing cancels).
-    private func shushToTalk() {
-        // Any time someone is out in the room, including a companion while a new one is made.
-        guard phase != .capturing, scene.actors.contains(where: { $0.root.isEnabled }), talk.state == .idle else { return }
+    /// "Shhh" → whoever's talking stops.
+    private func shush() {
+        guard hasCharacters else { return }
         flash("🤫")
-        startTalking()
-        guard talk.state == .listening else { return }
-        Task {
-            var lastText = "", lastChange = Date(), started = Date()
-            while talk.state == .listening {
-                try? await Task.sleep(for: .milliseconds(250))
-                if talk.caption != lastText { lastText = talk.caption; lastChange = Date() }
-                let quietFor = Date().timeIntervalSince(lastChange)
-                if !lastText.isEmpty && quietFor > 1.5 { break }
-                if lastText.isEmpty && Date().timeIntervalSince(started) > 6 { break }
-            }
-            stopTalking()
-        }
+        talk.interrupt()
     }
 
     private func pointed(at tip: CGPoint) {
