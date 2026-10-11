@@ -171,7 +171,7 @@ final class ClaudeClient {
                 break
             }
         }
-        print("[DC] draw stop=\(stopReason ?? "nil") delivered=\(delivered) raw: \(raw.prefix(600))")
+        print("[DC] draw stop=\(stopReason ?? "nil") delivered=\(delivered) raw: \(raw.prefix(6000))")
         if delivered == 0 {
             // Never a silent "nothing happened": the caller retries or shows why.
             throw stopReason == "refusal" ? Failure.declined : Failure.empty

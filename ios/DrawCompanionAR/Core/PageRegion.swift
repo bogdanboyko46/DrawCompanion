@@ -47,6 +47,8 @@ enum PageRegion {
         let k = paper.w / Double(width) // paper units per pixel
         var box = PaperRect(x: Double(minX) * k, y: Double(minY) * k,
                             w: Double(maxX - minX) * k, h: Double(maxY - minY) * k)
+        // Only skip the close-up when the drawing itself fills most of the page.
+        guard box.w * box.h < paper.w * paper.h * 0.35 else { return nil }
         // Room around the drawing for additions, at least 300 units across.
         let margin = max(box.w, box.h) * 0.4 + 30
         box = PaperRect(x: box.x - margin, y: box.y - margin, w: box.w + 2 * margin, h: box.h + 2 * margin)
@@ -55,7 +57,8 @@ enum PageRegion {
         // Clamp to the page.
         box.x = max(0, box.x); box.y = max(0, box.y)
         box.w = min(paper.w - box.x, box.w); box.h = min(paper.h - box.y, box.h)
-        guard box.w * box.h < paper.w * paper.h * 0.6 else { return nil }
+        // A close-up that's almost the whole page adds nothing.
+        guard box.w * box.h < paper.w * paper.h * 0.85 else { return nil }
         return box
     }
 }

@@ -117,6 +117,14 @@ final class AppModel: ObservableObject {
         guard !text.isEmpty else { return }
         lastHeard = text
         pending.append(text)
+        // A drawing already under way finishes; what was just said is handled
+        // right after as its own turn (it may revise the outline). Restarting
+        // on every pause made a request take 2-3x as long. Before the filter
+        // has decided, the phrases are still combined into one request.
+        if inflight != nil, turnAction == .new || turnAction == .revise {
+            print("[DC] queued after the current drawing: \(text)")
+            return
+        }
         sendTurn()
     }
 
@@ -222,6 +230,14 @@ final class AppModel: ObservableObject {
             outline?.strokes.append(stroke)
         case .done:
             pending.removeFirst(min(utterances.count, pending.count))
+            if !pending.isEmpty {
+                // Something was said while this was drawing: handle it next.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.pending.isEmpty else { return }
+                    self.inflight = nil
+                    self.sendTurn()
+                }
+            }
             rollback = nil
             if turnDrawing { startTracking(baseline: baseline, paper: paper) }
         }
@@ -242,6 +258,8 @@ final class AppModel: ObservableObject {
         // detection (noisy on folded or curled paper) only takes over again if
         // the drawing is lost for a while.
         ar.followDrawing = aligner != nil
+        dumpedAlignImages = false
+        Self.dumpGray(reference, Self.alignWidth, alignHeight, name: "align-reference.pgm")
         lastLock = CACurrentMediaTime()
         print("[DC] aligner \(aligner == nil ? "unavailable (no drawing found)" : "ready")")
         pendingJump = nil
@@ -312,9 +330,12 @@ final class AppModel: ObservableObject {
         let prior = correction
         let version = ar.version
         let (w, h) = (aligner.width, aligner.height)
+        let dump = !dumpedAlignImages
+        dumpedAlignImages = true
         alignQueue.async { [weak self] in
-            let found = PageImaging.gray(pixelBuffer, corners: corners, width: w, height: h)
-                .flatMap { aligner.align(current: $0, prior: prior) }
+            let current = PageImaging.gray(pixelBuffer, corners: corners, width: w, height: h)
+            if dump, let current { Self.dumpGray(current, w, h, name: "align-current.pgm") }
+            let found = current.flatMap { aligner.align(current: $0, prior: prior) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.aligning = false
@@ -366,6 +387,16 @@ final class AppModel: ObservableObject {
         lastLock = CACurrentMediaTime()
         correction = .identity
         pendingJump = nil
+    }
+
+    /// One pair of alignment images per outline, saved for debugging
+    /// (Documents/align-reference.pgm and align-current.pgm).
+    private var dumpedAlignImages = true
+
+    nonisolated private static func dumpGray(_ g: [Float], _ w: Int, _ h: Int, name: String) {
+        guard let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let bytes = g.map { UInt8(max(0, min(255, $0))) }
+        try? (Data("P5\n\(w) \(h)\n255\n".utf8) + Data(bytes)).write(to: dir.appendingPathComponent(name))
     }
 
     /// Paper-units map from the reference photo (where the AI drew) to where
