@@ -41,6 +41,8 @@ final class ARController: NSObject, ARSessionDelegate {
     /// Why the page wasn't found, counted and logged every few seconds while
     /// it's missing (so "Looking for paper" can be diagnosed from the log).
     private var misses: [String: Int] = [:]
+    /// The latest reason the page wasn't found, with when (for the status hint).
+    private(set) var lastMiss: (reason: String, at: TimeInterval)?
     private var lastMissLog: TimeInterval = 0
     private var detecting = false
     private var lastDetectStart: TimeInterval = 0
@@ -133,6 +135,7 @@ final class ARController: NSObject, ARSessionDelegate {
 
     private func miss(_ why: String, _ frame: ARFrame) {
         guard corners == nil else { return }
+        lastMiss = (why, frame.timestamp)
         misses[why, default: 0] += 1
         if frame.timestamp - lastMissLog > 3 {
             lastMissLog = frame.timestamp

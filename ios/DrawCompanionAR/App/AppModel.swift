@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var listening = false
     @Published private(set) var working = false
     @Published private(set) var pageFound = false
+    /// What to do so the page can be found (shown while it isn't).
+    @Published private(set) var pageHint = "Looking for paper"
     @Published private(set) var hasOutline = false
     @Published private(set) var lastHeard = ""
     @Published private(set) var problem: String?
@@ -367,6 +369,15 @@ final class AppModel: ObservableObject {
     private func tick() {
         let now = CACurrentMediaTime()
         pageFound = ar.corners != nil && ar.trackingNormal
+        if !pageFound {
+            let hint: String
+            switch ar.lastMiss?.reason {
+            case "page cut off by the view edge"?: hint = "Move back so the whole page is in view"
+            case "page unsure"?, "no page seen"?: hint = "Point at your paper"
+            default: hint = "Looking for paper"
+            }
+            if pageHint != hint { pageHint = hint }
+        }
         if waitingForPage, ar.corners != nil, inflight == nil { sendTurn() }
         // You started talking: open the connection to the API now, so the
         // request at the end of the phrase doesn't also wait for the handshake.
