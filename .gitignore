@@ -9,3 +9,4 @@ xcuserdata/
 *.xcuserstate
 ios/DrawCompanion3D/DevKeys.plist
 ios/build/
+.claude/
