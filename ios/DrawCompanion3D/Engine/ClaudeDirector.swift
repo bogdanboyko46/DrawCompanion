@@ -213,3 +213,61 @@ struct ClaudeDirector {
         "front_index": described(["type": "integer"], "0-based index of the front-facing view among the render's views."),
     ])
 }
+
+// MARK: - Encounters: two characters talking (see Character/Encounters.swift)
+
+extension ClaudeDirector {
+    struct DialogueLine: Codable, Sendable, Equatable {
+        /// One of the two names passed in.
+        var speaker: String
+        var line: String
+        /// happy, surprised, shy, excited or neutral: drives the speaker's gesture.
+        var mood: String
+    }
+
+    private struct Dialogue: Decodable { var lines: [DialogueLine] }
+
+    /// A short, funny exchange between two characters meeting on the desk. `a`
+    /// walked up and speaks first. The two names must differ.
+    func dialogue(between a: CharacterInfo, and b: CharacterInfo, firstMeeting: Bool = true) async throws -> [DialogueLine] {
+        func describe(_ c: CharacterInfo) -> String {
+            var s = "\(c.name) (\(c.bodyPlan)): \(c.summary.isEmpty ? "no description" : c.summary)"
+            if !c.personality.traits.isEmpty { s += "\nPersonality: \(c.personality.traits.joined(separator: ", "))" }
+            s += String(format: "; energy %.1f of 1, friendliness %.1f of 1", c.personality.energy, c.personality.friendliness)
+            if !c.greeting.isEmpty { s += "\nHow they say hi: \"\(c.greeting)\"" }
+            return s
+        }
+        let text = """
+        Speaks first (just walked over): \(describe(a))
+
+        The other one: \(describe(b))
+
+        \(firstMeeting ? "They have never met before." : "They have met before and are bumping into each other again.")
+        """
+        let names = [a.name, b.name]
+        let schema = Self.object([
+            "lines": Self.array(Self.object([
+                "speaker": ["type": "string", "enum": names],
+                "line": Self.described(Self.string, "What they say, max 80 characters."),
+                "mood": ["type": "string", "enum": ["happy", "surprised", "shy", "excited", "neutral"]],
+            ])),
+        ])
+        let result: Dialogue = try await call(
+            system: Self.dialogueSystem, content: [["type": "text", "text": text]], schema: schema, effort: "low")
+        // Keep it bubble-sized whatever came back.
+        let lines = result.lines.compactMap { l -> DialogueLine? in
+            let line = String(l.line.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+            return line.isEmpty || !names.contains(l.speaker) ? nil : DialogueLine(speaker: l.speaker, line: line, mood: l.mood)
+        }
+        guard lines.count >= 2 else { throw DirectorError(message: "The dialogue came back empty.") }
+        return Array(lines.prefix(6))
+    }
+
+    static let dialogueSystem = """
+    You write tiny scenes for DrawCompanion, an AR app where characters people drew on paper come to life as little 3D figures walking around on a desk.
+    Two of them have just come face to face. Write what they say: 4 to 6 lines, alternating speakers, the first speaker starts. Each line at most 80 characters, ideally under 60: it shows in a speech bubble.
+    Make it funny and in character. Let their looks, body type and personality drive the jokes: a shy one stammers, a hyper one can't stop bouncing, a robot is literal, a cat is unimpressed. End on a warm or silly beat. Kid-friendly, never mean.
+    They live in their own world: never mention paper, drawings, pencils, the app, the phone or the camera.
+    mood sets the speaker's gesture for that line: happy (a wave), excited (a jump), surprised (a startled hop), shy (shrinks a little), neutral (none). Vary them.
+    """
+}
