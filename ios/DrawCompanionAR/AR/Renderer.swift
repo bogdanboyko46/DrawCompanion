@@ -36,6 +36,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let colorFormat: MTLPixelFormat
     private let cameraPipeline: MTLRenderPipelineState
     private let strokePipeline: MTLRenderPipelineState
+    private let printPipeline: MTLRenderPipelineState // strokes multiplied in as printed ink
     private let distortPipeline: MTLRenderPipelineState
     private let strokeStencil: MTLDepthStencilState
     private let noStencil: MTLDepthStencilState
@@ -57,9 +58,16 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var msaaStencil: MTLTexture?
     private var eyeTexture: MTLTexture?
 
-    // Headset settings, re-read from UserDefaults now and then.
+    // Settings, re-read from UserDefaults now and then.
     private var optics = HeadsetOptics.cardboard
-    private var opticsReadAt: CFTimeInterval = -.infinity
+    private var printedInk = true
+    private var settingsReadAt: CFTimeInterval = -.infinity
+
+    // Paper color beside the outline, measured from the camera image.
+    private var paper: SIMD3<Float>?
+    private var paperProbes: [SIMD2<Float>] = [] // camera-image pixels
+    private var paperSamples: [SIMD3<Float>] = []
+    private var printingThisFrame = false
     private var layout: HeadsetOptics.Layout?
     private var layoutFor: (optics: HeadsetOptics, size: CGSize)?
 
@@ -102,7 +110,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.queue = queue
         colorFormat = view.colorPixelFormat
 
-        func pipeline(_ vertex: String, _ fragment: String, blend: Bool, scenePass: Bool) -> MTLRenderPipelineState? {
+        enum Blend { case none, alpha, multiply }
+        func pipeline(_ vertex: String, _ fragment: String, blend: Blend, scenePass: Bool) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = library.makeFunction(name: vertex)
             d.fragmentFunction = library.makeFunction(name: fragment)
@@ -111,13 +120,22 @@ final class Renderer: NSObject, MTKViewDelegate {
                 d.rasterSampleCount = Self.sampleCount
                 d.stencilAttachmentPixelFormat = .stencil8
             }
-            if blend {
-                let a = d.colorAttachments[0]!
+            let a = d.colorAttachments[0]!
+            switch blend {
+            case .none:
+                break
+            case .alpha:
                 a.isBlendingEnabled = true
                 a.sourceRGBBlendFactor = .sourceAlpha
                 a.destinationRGBBlendFactor = .oneMinusSourceAlpha
                 a.sourceAlphaBlendFactor = .one
                 a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            case .multiply: // result = source × what's already there
+                a.isBlendingEnabled = true
+                a.sourceRGBBlendFactor = .destinationColor
+                a.destinationRGBBlendFactor = .zero
+                a.sourceAlphaBlendFactor = .zero
+                a.destinationAlphaBlendFactor = .one
             }
             do {
                 return try device.makeRenderPipelineState(descriptor: d)
@@ -126,12 +144,14 @@ final class Renderer: NSObject, MTKViewDelegate {
                 return nil
             }
         }
-        guard let camera = pipeline("cameraVertex", "cameraFragment", blend: false, scenePass: true),
-              let stroke = pipeline("capsuleVertex", "capsuleFragment", blend: true, scenePass: true),
-              let distort = pipeline("distortVertex", "distortFragment", blend: false, scenePass: false)
+        guard let camera = pipeline("cameraVertex", "cameraFragment", blend: .none, scenePass: true),
+              let stroke = pipeline("capsuleVertex", "capsuleFragment", blend: .alpha, scenePass: true),
+              let printed = pipeline("capsuleVertex", "capsuleFragmentMultiply", blend: .multiply, scenePass: true),
+              let distort = pipeline("distortVertex", "distortFragment", blend: .none, scenePass: false)
         else { return nil }
         cameraPipeline = camera
         strokePipeline = stroke
+        printPipeline = printed
         distortPipeline = distort
 
         let stencil = MTLStencilDescriptor()
@@ -189,6 +209,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             return
         }
         lastFrameTimestamp = frame.timestamp
+        refreshSettings()
         let scene = scene()
         let image = frame.camera.imageResolution
         // Person (hand) mask for this frame, when the phone supports it.
@@ -215,6 +236,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         animating = scene.fade > 0 && scene.fade < 1
         buildCapsules(scene, frame: frame, image: image, crop: crop, target: targetSize)
         let buffer = upload()
+        measurePaper(frame.capturedImage)
 
         guard ensureTargets(width: Int(targetSize.width), height: Int(targetSize.height)) else {
             inFlight.signal()
@@ -241,7 +263,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             var uniforms = StrokeUniforms(
                 target: SIMD4(Float(targetSize.width), Float(targetSize.height), mask == nil ? 0 : 1, 0),
                 crop: cropVector, samples0: samplePositions.0, samples1: samplePositions.1)
-            encoder.setRenderPipelineState(strokePipeline)
+            encoder.setRenderPipelineState(printingThisFrame ? printPipeline : strokePipeline)
             encoder.setDepthStencilState(strokeStencil)
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<StrokeUniforms>.stride, index: 1)
@@ -299,12 +321,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             : CGRect(x: (1 - viewAspect / imageAspect) / 2, y: 0, width: viewAspect / imageAspect, height: 1)
     }
 
-    private func headsetLayout(drawable: CGSize) -> HeadsetOptics.Layout? {
+    /// Re-reads settings twice a second: cheap, and changes show up live.
+    private func refreshSettings() {
         let now = CACurrentMediaTime()
-        if now - opticsReadAt > 0.5 { // cheap, and lets Settings changes show up live
-            optics = HeadsetOptics(defaults: .standard)
-            opticsReadAt = now
-        }
+        guard now - settingsReadAt > 0.5 else { return }
+        settingsReadAt = now
+        optics = HeadsetOptics(defaults: .standard)
+        printedInk = UserDefaults.standard.object(forKey: HeadsetInk.printedKey) as? Bool ?? true
+    }
+
+    private func headsetLayout(drawable: CGSize) -> HeadsetOptics.Layout? {
         guard drawable.width > 0, drawable.height > 0 else { return nil }
         if layout == nil || layoutFor?.optics != optics || layoutFor?.size != drawable {
             let l = optics.layout(screenWidth: Double(drawable.width), screenHeight: Double(drawable.height))
@@ -369,6 +395,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func buildCapsules(_ scene: Scene, frame: ARFrame, image: CGSize, crop: CGRect, target: CGSize) {
         capsules.removeAll(keepingCapacity: true)
         batches.removeAll(keepingCapacity: true)
+        paperProbes.removeAll(keepingCapacity: true)
         let now = CACurrentMediaTime()
         arrivals.update(scene.strokes, now: now)
         guard scene.fade > 0, !scene.strokes.isEmpty else { return }
@@ -386,6 +413,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         func toTarget(_ p: CGPoint) -> SIMD2<Float> { SIMD2((Float(p.x) - ox) * sx, (Float(p.y) - oy) * sy) }
         // The drawing's own ink color, as the camera sees it.
         let ink = SIMD3(scene.style.red, scene.style.green, scene.style.blue)
+        // Printed look: lines carry the ink's transmittance and are multiplied
+        // into the image (paper measured on earlier frames; mid-grey paper
+        // until then).
+        let transmittance = printedInk ? HeadsetInk.transmittance(ink: ink, paper: paper ?? SIMD3(repeating: 0.75)) : nil
+        printingThisFrame = transmittance != nil
+        // Every few points, a spot just beside the line where the paper shows.
+        let probeEvery = max(1, scene.strokes.reduce(0) { $0 + $1.points.count } / 96)
+        var probeCount = 0
 
         for (i, stroke) in scene.strokes.enumerated() {
             let role = Self.roleStyle(stroke.role)
@@ -413,13 +448,57 @@ final class Renderer: NSObject, MTKViewDelegate {
             if stroke.closed, points.count > 2, let start = points.first { points.append(start) }
             let unit = max(width, 3)
             let dash: (on: Float, off: Float)? = role.dashOn > 0 ? (role.dashOn * unit, role.dashOff * unit) : nil
-            let color = SIMD4(ink, alpha)
+            let color = SIMD4(transmittance ?? ink, alpha)
+            if points.count >= 2 {
+                let beside = width / 2 + 5 * sx // target pixels: half the line plus ~5 camera pixels
+                for k in 0..<points.count {
+                    probeCount += 1
+                    guard probeCount % probeEvery == 0 else { continue }
+                    let d = points[min(k + 1, points.count - 1)] - points[max(k - 1, 0)]
+                    let len = HeadsetStrokes.length(d)
+                    guard len > 0.01 else { continue }
+                    let n = SIMD2(-d.y, d.x) / len * beside
+                    let left = points[k] + n, right = points[k] - n
+                    paperProbes.append(SIMD2(left.x / sx + ox, left.y / sy + oy))
+                    paperProbes.append(SIMD2(right.x / sx + ox, right.y / sy + oy))
+                }
+            }
             let params = SIMD4<Float>(width / 2, 0, 0, 0)
             let begin = capsules.count
             HeadsetStrokes.forEachPiece(points, dash: dash, reveal: HeadsetStrokes.Arrivals.reveal(arrival)) { a, b in
                 capsules.append(Capsule(ends: SIMD4(a.x, a.y, b.x, b.y), color: color, params: params))
             }
             if capsules.count > begin { batches.append((begin, capsules.count - begin)) }
+        }
+    }
+
+    /// Reads the camera image at `paperProbes` and updates the paper color
+    /// (smoothed over frames, so a passing shadow doesn't flicker the lines).
+    private func measurePaper(_ buffer: CVPixelBuffer) {
+        guard printedInk, !paperProbes.isEmpty, CVPixelBufferGetPlaneCount(buffer) >= 2 else { return }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let yBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0),
+              let cBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 1) else { return }
+        let yRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0), cRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1)
+        let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let cw = CVPixelBufferGetWidthOfPlane(buffer, 1), ch = CVPixelBufferGetHeightOfPlane(buffer, 1)
+        paperSamples.removeAll(keepingCapacity: true)
+        for p in paperProbes {
+            let x = Int(p.x), y = Int(p.y)
+            guard x >= 0, y >= 0, x < w, y < h else { continue }
+            let cx = min(cw - 1, x * cw / w), cy = min(ch - 1, y * ch / h)
+            let luma = yBase.load(fromByteOffset: y * yRow + x, as: UInt8.self)
+            let cb = cBase.load(fromByteOffset: cy * cRow + cx * 2, as: UInt8.self)
+            let cr = cBase.load(fromByteOffset: cy * cRow + cx * 2 + 1, as: UInt8.self)
+            paperSamples.append(HeadsetInk.rgb(y: luma, cb: cb, cr: cr))
+        }
+        guard let measured = HeadsetInk.paper(from: paperSamples) else { return }
+        if let old = paper {
+            paper = old + (measured - old) * 0.1
+        } else {
+            paper = measured
+            print("[DC] outline: paper measured r\(measured.x) g\(measured.y) b\(measured.z); printed-ink look on")
         }
     }
 
