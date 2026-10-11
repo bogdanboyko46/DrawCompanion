@@ -116,15 +116,15 @@ final class AppModel: ObservableObject {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         lastHeard = text
-        pending.append(text)
-        // A drawing already under way finishes; what was just said is handled
-        // right after as its own turn (it may revise the outline). Restarting
-        // on every pause made a request take 2-3x as long. Before the filter
-        // has decided, the phrases are still combined into one request.
+        // While a drawing is coming in, speech is ignored: the drawing always
+        // finishes, and nothing said meanwhile changes or restarts it.
+        // (Restarting on every pause made a request take 2-3x as long.)
+        // Before the filter has decided, phrases still combine into one request.
         if inflight != nil, turnAction == .new || turnAction == .revise {
-            print("[DC] queued after the current drawing: \(text)")
+            print("[DC] ignored while drawing: \(text)")
             return
         }
+        pending.append(text)
         sendTurn()
     }
 
@@ -230,14 +230,6 @@ final class AppModel: ObservableObject {
             outline?.strokes.append(stroke)
         case .done:
             pending.removeFirst(min(utterances.count, pending.count))
-            if !pending.isEmpty {
-                // Something was said while this was drawing: handle it next.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, !self.pending.isEmpty else { return }
-                    self.inflight = nil
-                    self.sendTurn()
-                }
-            }
             rollback = nil
             if turnDrawing { startTracking(baseline: baseline, paper: paper) }
         }
