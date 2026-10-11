@@ -2,6 +2,23 @@
 
 **Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at 48803ed)
 
+
+## Final summary (end of session, ~3:35 AM EST)
+
+**Merged by the lead (in `claude/sleepy-cori-b7523k`):**
+- Renderer rewrite: 4x MSAA scene pass; strokes as round-capped capsules with per-sample coverage and a per-stroke stencil (smooth, even translucent lines; clean dashes around corners); ring-buffered instance data, reused scratch arrays, frames drawn only for a new camera image or an animation; 120 Hz.
+- Draw-on: each new stroke draws itself along its length over 0.45 s while fading in.
+- Printed-ink look (`1b347af`): the outline is multiplied into the camera image using ink ÷ measured paper color, so lighting, shadows and paper grain show through. Toggle: `outline.printedInk`.
+- Smooth traced fade (`6b3a9cc`): traced strokes ease down instead of stepping; finished strokes go to 25%.
+- Headset optics (view currently off): barrel pre-distortion, eye layout, settings `headset.*` (table below).
+
+**Ready but not merged yet:**
+- `441ee3f`: a steady partial fade (e.g. the faint outline while refining) no longer keeps the view redrawing at 120 Hz. One-file change in `Renderer.swift`, CI green.
+
+**What to look for on the phone:** smooth lines with no stair steps; the outline reads as pencil on the page and darkens in shadow (compare with `outline.printedInk` off); strokes draw on as they stream in; traced strokes fade smoothly. Console: `[DC] render: N fps drawn, X ms CPU per frame` every 10 s (expect ~60 when idle, more during animations) and `[DC] outline: paper measured …` once.
+
+**Not verified in CI (needs the phone):** GPU behavior. If the camera view is black, look for `[DC] renderer: pipeline … failed`.
+
 ## Direction change noted
 Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
 
