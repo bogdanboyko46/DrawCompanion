@@ -380,6 +380,7 @@ final class AppModel: ObservableObject {
             switch ar.lastMiss?.reason {
             case "page cut off by the view edge"?: hint = "Move back so the whole page is in view"
             case "page unsure"?, "no page seen"?: hint = "Show the whole page, hands off, for a second"
+            case let r? where r.hasPrefix("detections"): hint = "Hold the phone still for a second"
             default: hint = "Looking for paper"
             }
             if pageHint != hint { pageHint = hint }

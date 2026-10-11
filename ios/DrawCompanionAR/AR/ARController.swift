@@ -55,6 +55,7 @@ final class ARController: NSObject, ARSessionDelegate {
     private static let agree: Float = 0.012 // m: candidates this close count as the same new placement
     private static let votesToMove = 3 // ≈1.2 s of agreeing detections
     private static let votesToStart = 2
+    private static let agreeToStart: Float = 0.03
 
     func start() {
         let config = ARWorldTrackingConfiguration()
@@ -244,7 +245,15 @@ final class ARController: NSObject, ARSessionDelegate {
 
         guard let current = corners else {
             // First sighting: wait for a second detection to agree before showing anything.
-            if let agreed = vote(next, needed: Self.votesToStart) { pin(agreed) }
+            // Handheld, corners wobble by a couple of centimeters between
+            // detections; the drawing aligner fine-tunes the lock afterwards.
+            let disagreement = candidate.map { Self.spread(next, $0) }
+            if let agreed = vote(next, needed: Self.votesToStart, within: Self.agreeToStart) {
+                pin(agreed)
+                print("[DC] page: found")
+            } else if let d = disagreement {
+                miss(d < 0.1 ? String(format: "detections %.0f cm apart", d * 100) : "detections far apart", frame)
+            }
             return
         }
         if Self.spread(next, current) < Self.noise {
@@ -258,8 +267,8 @@ final class ARController: NSObject, ARSessionDelegate {
     }
 
     /// Counts agreeing detections; returns their average once there are enough.
-    private func vote(_ next: [SIMD3<Float>], needed: Int) -> [SIMD3<Float>]? {
-        if let c = candidate, Self.spread(next, c) < Self.agree {
+    private func vote(_ next: [SIMD3<Float>], needed: Int, within: Float = ARController.agree) -> [SIMD3<Float>]? {
+        if let c = candidate, Self.spread(next, c) < within {
             candidate = zip(c, next).map { $0 + ($1 - $0) * 0.5 }
             candidateVotes += 1
         } else {
