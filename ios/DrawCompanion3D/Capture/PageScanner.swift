@@ -330,7 +330,20 @@ enum PageScanner {
         inkMask(source)
     }
 
-    /// Transparent-background version of an image (used for the concept render).
+    /// The subject of a rendered image (the concept on its plain background),
+    /// cropped to it. Apple's subject lift is made for exactly this.
+    static func subjectCutout(_ image: CGImage) -> CGImage? {
+        let request = VNGenerateForegroundInstanceMaskRequest()
+        let handler = VNImageRequestHandler(cgImage: image)
+        guard (try? handler.perform([request])) != nil,
+              let obs = request.results?.first, !obs.allInstances.isEmpty,
+              let masked = try? obs.generateMaskedImage(ofInstances: obs.allInstances, from: handler, croppedToInstancesExtent: true)
+        else { return nil }
+        let ci = CIImage(cvPixelBuffer: masked)
+        return ciContext.createCGImage(ci, from: ci.extent)
+    }
+
+    /// Transparent-background version of a drawing.
     static func cutout(_ image: CGImage) -> CGImage? {
         isolate(image)?.cutout
     }

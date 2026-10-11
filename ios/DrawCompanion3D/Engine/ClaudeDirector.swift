@@ -35,6 +35,8 @@ struct ClaudeDirector {
         var faithful: Bool
         var issues: [String]
         var revised_prompt: String
+        /// Which of the views (0-based) is the front view.
+        var front_index: Int
     }
 
     // MARK: Calls
@@ -58,7 +60,8 @@ struct ClaudeDirector {
         return sheet
     }
 
-    func reviewConcept(drawing: Data, concept: Data, conceptType: String, sheet: Sheet) async throws -> Review {
+    /// `views`: the concept render's views (front, side, back… in whatever order Meshy returned them).
+    func reviewConcept(drawing: Data, views: [(data: Data, type: String)], sheet: Sheet) async throws -> Review {
         let text = """
         Character: \(sheet.name): \(sheet.summary)
         Must keep: \(sheet.design_details.joined(separator: "; "))
@@ -67,7 +70,7 @@ struct ClaudeDirector {
         """
         return try await call(
             system: Self.reviewSystem,
-            content: [image("image/jpeg", drawing), image(conceptType, concept), ["type": "text", "text": text]],
+            content: [image("image/jpeg", drawing)] + views.map { image($0.type, $0.data) } + [["type": "text", "text": text]],
             schema: Self.reviewSchema)
     }
 
@@ -158,7 +161,7 @@ struct ClaudeDirector {
     """
 
     static let reviewSystem = """
-    You check concept renders for DrawCompanion. Image 1 is the user's drawing; image 2 is a render meant to be the same character as a clean 3D figure.
+    You check concept renders for DrawCompanion. Image 1 is the user's drawing. The images after it are views (front, side, back, in no particular order) of a render meant to be the same character as a clean 3D figure; front_index is the 0-based index, among those views, of the front view. Judge the design across all the views together: a side view showing one ear is fine if the front view shows both.
     Judge fidelity to the DESIGN, not drawing skill: same species/type, same proportions, same features and accessories, same colors (or the planned palette if the drawing was uncolored), full body visible, plain background, usable pose for 3D.
     Minor stylization is expected and fine. Flag only differences the user would notice and mind ("it lost the scarf", "it has two eyes instead of three", "cropped feet").
     If it is not faithful, write revised_prompt: a corrected image prompt (max 700 characters). Otherwise leave it empty.
@@ -203,5 +206,6 @@ struct ClaudeDirector {
         "faithful": described(bool, "True if the render is recognizably the same character design."),
         "issues": described(array(string), "Concrete differences that matter, most important first."),
         "revised_prompt": described(string, "If not faithful, a corrected image prompt; else empty."),
+        "front_index": described(["type": "integer"], "0-based index of the front-facing view among the render's views."),
     ])
 }

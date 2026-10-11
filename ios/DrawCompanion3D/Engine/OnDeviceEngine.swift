@@ -161,11 +161,14 @@ actor OnDeviceEngine: CharacterBackend {
                 w.conceptTask = task
                 work[id] = w
                 let done = try await meshy.wait(.imageToImage, task) { p in await self.progress(id, p) }
-                guard let first = done.image_urls?.first else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
-                w.conceptViews = done.image_urls?.count ?? 1
-                let file = folder.appending(path: "concept.png")
-                try await meshy.download(first, to: file)
-                jobs[id]?.conceptUrl = file.absoluteString
+                let urls = done.image_urls ?? []
+                guard !urls.isEmpty else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
+                w.conceptViews = urls.count
+                for (i, url) in urls.enumerated() {
+                    try await meshy.download(url, to: folder.appending(path: "view-\(i).png"))
+                }
+                // Until the check says which view is the front, guess the middle one.
+                showView(id, urls.count > 2 ? 1 : 0)
             }
             if !w.done.contains(.concept) {
                 enter(id, .concept)
@@ -177,14 +180,19 @@ actor OnDeviceEngine: CharacterBackend {
             // 3. Claude checks the concept against the drawing; one repaint if it drifted.
             if !w.done.contains(.review) {
                 enter(id, .review)
-                if !w.reviewed, let concept = try? Data(contentsOf: folder.appending(path: "concept.png")) {
+                let views = (0..<max(1, w.conceptViews)).compactMap { i -> (data: Data, type: String)? in
+                    guard let d = try? Data(contentsOf: folder.appending(path: "view-\(i).png")) else { return nil }
+                    return (d, Self.imageType(d))
+                }
+                if !w.reviewed, !views.isEmpty {
                     w.reviewed = true
                     work[id] = w
-                    if let review = try? await director.reviewConcept(
-                        drawing: w.jpeg, concept: concept, conceptType: Self.imageType(concept), sheet: sheet),
-                       !review.faithful, !review.revised_prompt.isEmpty {
-                        progress(id, 0.3)
-                        try await paint(String(review.revised_prompt.prefix(800)))
+                    if let review = try? await director.reviewConcept(drawing: w.jpeg, views: views, sheet: sheet) {
+                        showView(id, review.front_index)
+                        if !review.faithful, !review.revised_prompt.isEmpty {
+                            progress(id, 0.3)
+                            try await paint(String(review.revised_prompt.prefix(800)))
+                        }
                     }
                 }
                 w.done.insert(.review)
@@ -239,6 +247,18 @@ actor OnDeviceEngine: CharacterBackend {
         } catch {
             fail(id, error.localizedDescription)
         }
+    }
+
+    /// Shows one of the concept's views (as concept.png) on the paper.
+    private func showView(_ id: String, _ index: Int) {
+        let folder = library.folder(id)
+        let source = folder.appending(path: "view-\(index).png")
+        let file = folder.appending(path: "concept.png")
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.copyItem(at: source, to: file)
+        // A new path each time so the app notices the change.
+        jobs[id]?.conceptUrl = file.absoluteString + "#\(index)"
     }
 
     private func enter(_ id: String, _ stage: GenerationStage) {

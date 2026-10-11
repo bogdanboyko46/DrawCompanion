@@ -138,7 +138,7 @@ final class AppModel {
     private func follow(_ start: CharacterJob) async throws {
         var job = start
         var misses = 0
-        var conceptRequested = false
+        var shownConcept: String?
         var lifted = false
         while job.status == .queued || job.status == .running {
             try await Task.sleep(for: .seconds(1.2))
@@ -155,13 +155,14 @@ final class AppModel {
                 lifted = true
                 scene.liftPortal()
             }
-            if !conceptRequested, let url = job.conceptUrl {
-                conceptRequested = true
+            // The concept can change once (when the front view is picked); show the latest.
+            if let url = job.conceptUrl, url != shownConcept {
+                shownConcept = url
                 Task {
                     let image = try? await backend.image(at: url)
                     guard let image, let cg = image.cgImage else { return }
                     // Vision is slow; keep it off the main thread.
-                    let cut = await Task.detached { PageScanner.cutout(cg) ?? cg }.value
+                    let cut = await Task.detached { PageScanner.subjectCutout(cg) ?? cg }.value
                     conceptImage = image
                     scene.showConcept(cut)
                     UIImpactFeedbackGenerator(style: .soft).impactOccurred()

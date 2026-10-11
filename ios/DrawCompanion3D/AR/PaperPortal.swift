@@ -89,7 +89,7 @@ final class PaperPortal {
 
     /// `cg` should already be cut out (do that off the main thread).
     func showConcept(_ cg: CGImage) {
-        guard concept == nil else { return }
+        concept?.removeFromParent() // a better view arrived: swap it in
         let aspect = Float(cg.width) / Float(max(1, cg.height))
         let entity = PaperPortal.makeCard(image: cg, width: cardHeight * aspect, height: cardHeight)
         entity.components.set(OpacityComponent(opacity: 0))
