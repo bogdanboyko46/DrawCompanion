@@ -337,7 +337,8 @@ final class AppModel: ObservableObject {
             self.refining = false
             let secs = CACurrentMediaTime() - t0
             guard let result else { return }
-            guard self.outlineTurn == turn, self.turnID == turn, self.fadeStart == nil, var outline = self.outline else {
+            // Chatter since then (ignored turns) doesn't matter; a different outline does.
+            guard self.outlineTurn == turn, self.fadeStart == nil, var outline = self.outline else {
                 print(String(format: "[DC] upgrade arrived after %.1f s but the outline changed: dropped", secs))
                 return
             }
@@ -362,12 +363,12 @@ final class AppModel: ObservableObject {
             upgradeTask?.cancel()
             refining = false
         }
-        outlineTurn = turnID
-        let previous = (outline, tracker, trackState, fadeStart, aligner, correction)
+        let previous = (outline, tracker, trackState, fadeStart, aligner, correction, outlineTurn)
         rollback = { [weak self] in
             guard let self else { return }
-            (self.outline, self.tracker, self.trackState, self.fadeStart, self.aligner, self.correction) = previous
+            (self.outline, self.tracker, self.trackState, self.fadeStart, self.aligner, self.correction, self.outlineTurn) = previous
         }
+        outlineTurn = turnID
         // The new outline's coordinates refer to this exact photo: align to it.
         aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
         correction = .identity
@@ -620,7 +621,7 @@ final class AppModel: ObservableObject {
         var fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
         // Claude's quick outline is a draft while the better one is coming:
         // shown faintly, so it's clear to wait rather than trace it.
-        if refining { fade *= 0.4 }
+        if refining, outlineTurn == upgradeTurn { fade *= 0.4 }
         let map = referenceToCurrent
         let strokes: [Stroke]
         if let cached = mappedStrokes, cached.revision == outlineRevision, cached.map == map {
