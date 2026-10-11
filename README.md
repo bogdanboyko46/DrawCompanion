@@ -2,12 +2,6 @@
 
 An AR drawing assistant. You draw on real paper wearing a lightweight headset (your phone in a head-mounted viewer). The microphone is always on: just talk ("I'm stuck, maybe a cat on the windowsill?"). The AI never talks back. It draws an outline on your paper wherever it fits best, changes it when you say so ("bigger, facing left"), clears it when asked, and ignores everything else you say. Once you stop drawing on the outline for 3 seconds, it clears.
 
-## Demo
-
-![The iPhone app placing an outline next to a real pencil drawing](docs/media/demo-outline.jpg)
-
-*A real capture from the iPhone app. Someone said "Draw a character very similar to the middle one on the left side of the paper", and a few seconds later the outline (red here so it stands out) appeared on the paper, left of the middle figure. In the app it's drawn in the pencil's own measured grey and line width, locked to the sheet as the phone moves.*
-
 **Try it in a minute** (iPhone app, see [ios/README.md](ios/README.md) to install):
 
 1. Put a sheet with a drawing on a desk. Hold the phone about 40 cm above it so the whole page is in view for a second. The status at the top left goes from "Show the whole page…" / "Move back…" to **Listening**.
