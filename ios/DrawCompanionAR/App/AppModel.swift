@@ -75,6 +75,7 @@ final class AppModel: ObservableObject {
     private var turnID = 0
     private var rollback: (() -> Void)?
     private var waitingForPage = false
+    private var lastPhraseAt: TimeInterval = 0
 
     private var upgradeTask: Task<Void, Never>?
     /// The tracing baseline of the current outline, to restart tracking when
@@ -150,6 +151,11 @@ final class AppModel: ObservableObject {
             print("[DC] ignored while drawing: \(text)")
             return
         }
+        // Waiting for the page: what was said long ago is stale; don't send it
+        // later bundled with today's request ("draw a cat" said five times).
+        let now = CACurrentMediaTime()
+        if waitingForPage, now - lastPhraseAt > 15 { pending.removeAll() }
+        lastPhraseAt = now
         pending.append(text)
         sendTurn()
     }
