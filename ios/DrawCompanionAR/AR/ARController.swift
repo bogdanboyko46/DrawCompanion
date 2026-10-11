@@ -116,15 +116,19 @@ final class ARController: NSObject, ARSessionDelegate {
         let request = VNDetectDocumentSegmentationRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         guard (try? handler.perform([request])) != nil, let obs = request.results?.first else { return .failure(.noPage) }
-        // Two detections must still agree before the page is pinned, so a
-        // less sure one is fine (hands on the paper lower the confidence).
-        guard obs.confidence > 0.5 else { return .failure(.lowConfidence) }
         // Vision's origin is bottom-left; flip to top-left.
         let pts = [obs.topLeft, obs.topRight, obs.bottomRight, obs.bottomLeft].map { CGPoint(x: $0.x, y: 1 - $0.y) }
         // A corner on the image border means the page is cut off: its "corner" is
         // really the edge of the view, and the page would come out the wrong shape.
+        // Checked first: a cut-off page also gets a low confidence, and "move
+        // back" is the useful hint then. (A whole-frame guess is "no page".)
         let margin = 0.015
-        guard pts.allSatisfy({ $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }) else { return .failure(.cutOff) }
+        let onBorder = pts.filter { !($0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin) }.count
+        if onBorder == 4 { return .failure(.noPage) }
+        if onBorder > 0 { return .failure(.cutOff) }
+        // Two detections must still agree before the page is pinned, so a
+        // less sure one is fine (hands on the paper lower the confidence).
+        guard obs.confidence > 0.5 else { return .failure(.lowConfidence) }
         let tl = pts.min { $0.x + $0.y < $1.x + $1.y }!
         let br = pts.max { $0.x + $0.y < $1.x + $1.y }!
         let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
