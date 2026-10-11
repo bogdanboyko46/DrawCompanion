@@ -424,7 +424,11 @@ final class AppModel: ObservableObject {
                 // The outline was replaced or is already fading: this result is stale.
                 guard let state, self.tracker === tracker, self.fadeStart == nil else { return }
                 self.trackState = state
-                if state.done { self.fadeStart = now }
+                if state.done {
+                    let traced = state.strokes.map(\.progress)
+                    print(String(format: "[DC] outline traced (%.0f%%) and left alone %.0f s: clearing", 100 * traced.reduce(0, +) / Double(max(1, traced.count)), state.idleSeconds))
+                    self.fadeStart = now
+                }
             }
         }
     }
