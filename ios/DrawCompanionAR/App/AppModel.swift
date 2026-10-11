@@ -81,6 +81,8 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        // Drawing takes a while and the phone sits still: don't let it lock.
+        UIApplication.shared.isIdleTimerDisabled = true
         ar.start()
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -108,7 +110,6 @@ final class AppModel: ObservableObject {
 
     func exitHeadset() {
         headset = false
-        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     /// A finished phrase (spoken, or typed in the phone view).
