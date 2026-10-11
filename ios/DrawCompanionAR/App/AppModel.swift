@@ -29,6 +29,12 @@ final class AppModel: ObservableObject {
     private var aligner: DrawingAligner?
     private var correction = Affine2.identity
     private var aligning = false
+    /// A big jump waiting for a second reading to confirm it (repeated shapes,
+    /// like two identical legs, can fool a single match by exactly one shape).
+    private var pendingJump: Affine2?
+    /// When the drawing aligner last locked on. If it loses the drawing for a
+    /// while (page moved far, looking away), paper-edge detection takes over again.
+    private var lastLock: TimeInterval = 0
     private let alignQueue = DispatchQueue(label: "drawcompanion.align", qos: .userInitiated)
     private static let alignWidth = 480
     private var trackState: CompletionTracker.State?
@@ -66,7 +72,7 @@ final class AppModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
-        alignTimer = Timer.scheduledTimer(withTimeInterval: 0.14, repeats: true) { [weak self] _ in
+        alignTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.alignStep() }
         }
     }
@@ -200,6 +206,7 @@ final class AppModel: ObservableObject {
         // The new outline's coordinates refer to this exact photo: align to it.
         aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
         correction = .identity
+        pendingJump = nil
         let history = action == .revise && outline != nil ? outline!.history + utterances : utterances
         outline = Outline(strokes: [], history: history, style: style)
         tracker = nil
@@ -214,8 +221,10 @@ final class AppModel: ObservableObject {
     }
 
     func clearOutline() {
+        ar.followDrawing = false
         aligner = nil
         correction = .identity
+        pendingJump = nil
         outline = nil
         tracker = nil
         trackState = nil
@@ -257,11 +266,13 @@ final class AppModel: ObservableObject {
     /// Measures how far the outline has drifted from the pencil lines (runs
     /// off the main thread, several times a second).
     private func alignStep() {
+        if ar.followDrawing, CACurrentMediaTime() - lastLock > 1.5 { ar.followDrawing = false }
         guard let aligner, !aligning, fadeStart == nil, let frame = ar.session.currentFrame,
               let corners = ar.imageCorners(in: frame) else { return }
         aligning = true
         let pixelBuffer = frame.capturedImage
         let prior = correction
+        let version = ar.version
         let (w, h) = (aligner.width, aligner.height)
         alignQueue.async { [weak self] in
             let found = PageImaging.gray(pixelBuffer, corners: corners, width: w, height: h)
@@ -269,15 +280,50 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.aligning = false
+                // The page was re-pinned since this started: the reading is stale.
+                guard self.ar.version == version else { return }
                 guard self.aligner === aligner, let found else {
                     print("[DC] align: no match")
                     return
                 }
+                let jump = hypot(found.tx - prior.tx, found.ty - prior.ty)
+                if jump > 12 {
+                    // Accept a big change only when the next reading agrees with it.
+                    if let pending = self.pendingJump, hypot(found.tx - pending.tx, found.ty - pending.ty) < 5 {
+                        self.pendingJump = nil
+                        self.correction = found
+                        print(String(format: "[DC] align: jump %.0f px confirmed", jump))
+                        self.repinToDrawing()
+                    } else {
+                        self.pendingJump = found
+                        print(String(format: "[DC] align: jump %.0f px held for confirmation", jump))
+                    }
+                    return
+                }
+                self.pendingJump = nil
                 print(String(format: "[DC] align: shift %.1f,%.1f px  scale %.3f  rot %.3f", found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
-                // Smooth out measurement jitter; big real moves still land within a few steps.
-                self.correction = self.correction.blended(toward: found, by: 0.6)
+                // Follow quickly; a little smoothing hides measurement jitter.
+                self.correction = self.correction.blended(toward: found, by: 0.8)
+                self.repinToDrawing()
             }
         }
+    }
+
+    /// Moves ARKit's page so the drawing sits exactly where it was measured,
+    /// then starts the correction over from zero. Without this, ARKit's own
+    /// error builds up as the phone moves and the correction has to chase it.
+    private func repinToDrawing() {
+        guard let map = referenceToCurrent else { return }
+        let paper = ar.paper
+        let cornersNow = [PaperPoint(x: 0, y: 0), PaperPoint(x: paper.w, y: 0),
+                          PaperPoint(x: paper.w, y: paper.h), PaperPoint(x: 0, y: paper.h)]
+        let moved = cornersNow.compactMap { ar.world(map.apply($0)) }
+        guard moved.count == 4 else { return }
+        ar.repin(moved)
+        ar.followDrawing = true
+        lastLock = CACurrentMediaTime()
+        correction = .identity
+        pendingJump = nil
     }
 
     /// Paper-units map from the reference photo (where the AI drew) to where

@@ -20,7 +20,13 @@ final class ARController: NSObject, ARSessionDelegate {
     private(set) var paper = PaperSize(aspect: 1.294)
     /// Keep paper units fixed while an outline is shown so it doesn't shift.
     var lockPaperSize = false
+    /// While the drawing aligner is locked on, it moves the page (more
+    /// precisely than paper-edge detection), so detections are ignored.
+    var followDrawing = false
     private(set) var lastSeen: TimeInterval = 0
+    /// Bumped whenever the page's corners change, so work started against
+    /// older corners can tell its result no longer applies.
+    private(set) var version = 0
     private(set) var trackingNormal = false
 
     private let visionQueue = DispatchQueue(label: "drawcompanion.page-detect", qos: .userInitiated)
@@ -108,6 +114,7 @@ final class ARController: NSObject, ARSessionDelegate {
             next = (0..<4).map { k in (0..<4).map { next[($0 + k) % 4] } }.min { Self.spread($0, old) < Self.spread($1, old) }!
         }
         lastSeen = frame.timestamp
+        if followDrawing { return }
 
         guard let current = corners else {
             // First sighting: wait for a second detection to agree before showing anything.
@@ -136,8 +143,17 @@ final class ARController: NSObject, ARSessionDelegate {
         return candidateVotes >= needed ? candidate : nil
     }
 
+    /// Moves the page to where the drawing was actually seen (from the drawing
+    /// aligner). ARKit then carries this corrected position smoothly.
+    func repin(_ next: [SIMD3<Float>]) {
+        guard next.count == 4 else { return }
+        corners = next
+        version += 1
+    }
+
     private func pin(_ next: [SIMD3<Float>]) {
         corners = next
+        version += 1
         candidate = nil
         candidateVotes = 0
         if !lockPaperSize {
