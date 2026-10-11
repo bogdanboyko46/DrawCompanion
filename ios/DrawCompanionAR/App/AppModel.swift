@@ -300,7 +300,7 @@ final class AppModel: ObservableObject {
 
     /// Asks the Mac's drawing server for a nicer version of the outline just
     /// drawn. It swaps in only if this outline is still up and you haven't
-    /// started tracing it; otherwise Claude's outline simply stays.
+    /// traced much of it (40%); otherwise Claude's outline simply stays.
     private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
         upgradeTask?.cancel()
         refining = false
@@ -329,7 +329,7 @@ final class AppModel: ObservableObject {
             }
             let traced = self.trackState?.strokes.map(\.progress) ?? []
             let progress = traced.isEmpty ? 0 : traced.reduce(0, +) / Double(traced.count)
-            guard progress < 0.15 else {
+            guard progress < 0.4 else {
                 print(String(format: "[DC] upgrade arrived after %.1f s, already %.0f%% traced: kept Claude's", secs, progress * 100))
                 return
             }
@@ -599,7 +599,10 @@ final class AppModel: ObservableObject {
     }
 
     func scene() -> Renderer.Scene {
-        let fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
+        var fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
+        // Claude's quick outline is a draft while the better one is coming:
+        // shown faintly, so it's clear to wait rather than trace it.
+        if refining { fade *= 0.4 }
         let map = referenceToCurrent
         let strokes: [Stroke]
         if let cached = mappedStrokes, cached.revision == outlineRevision, cached.map == map {
