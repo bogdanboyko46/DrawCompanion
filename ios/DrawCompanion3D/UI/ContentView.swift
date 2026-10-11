@@ -65,6 +65,9 @@ struct ContentView: View {
             case .making:
                 GenerationCard()
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            case .ready:
+                ReadyPrompt()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .padding(.horizontal, 16)

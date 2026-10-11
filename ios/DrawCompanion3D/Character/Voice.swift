@@ -67,8 +67,9 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
     }
 }
 
-/// How a character sounds, from what Claude wrote about it: small and cute
-/// is high, big monsters are low and slow, energetic ones talk fast.
+/// How a character sounds, from what Claude wrote about it. A real human voice
+/// (iOS's Premium/Enhanced voices when installed), only nudged: pushing a
+/// synthetic voice's pitch far up or down is what makes it sound creepy.
 struct VoiceProfile {
     var voice: AVSpeechSynthesisVoice?
     var pitch: Float
@@ -80,25 +81,22 @@ struct VoiceProfile {
         let traits = (personality.traits + [info?.summary ?? ""]).joined(separator: " ").lowercased()
         let has = { (words: [String]) in words.contains { traits.contains($0) } }
 
-        // Size sets the base pitch: a 1.4 m figure speaks at 1.0, halving the size raises it.
         let height = Float(info?.heightMeters ?? 0.6)
-        var pitch = 1.05 - 0.3 * log2(max(0.2, height) / 1.4)
-        switch info?.bodyPlan {
-        case "blob", "object": pitch += 0.08
-        case "winged": pitch += 0.05
-        default: break
-        }
-        if has(["cute", "tiny", "little", "bubbly", "squeak", "sweet", "baby", "giggl"]) { pitch += 0.12 }
-        if has(["grump", "fierce", "scary", "monster", "menac", "gruff", "spook", "brave", "tough", "dragon"]) { pitch -= 0.15 }
-        self.pitch = min(1.75, max(0.55, pitch))
+        let cute = has(["cute", "tiny", "little", "bubbly", "squeak", "sweet", "baby", "giggl", "silly", "goofy"])
+        let gruff = has(["grump", "fierce", "monster", "menac", "gruff", "tough", "dragon"]) || height > 2
+        // Small nudges only (natural range ~0.95–1.12).
+        var pitch: Float = 1.03
+        if cute { pitch += 0.07 }
+        if gruff { pitch -= 0.06 }
+        self.pitch = pitch
 
         let energy = Float(personality.energy)
-        var rate = AVSpeechUtteranceDefaultSpeechRate * (0.86 + 0.3 * energy)
-        if height > 2 { rate *= 0.9 }
-        if has(["sleepy", "lazy", "calm", "wise", "old"]) { rate *= 0.92 }
-        self.rate = min(AVSpeechUtteranceMaximumSpeechRate * 0.75, max(AVSpeechUtteranceMinimumSpeechRate + 0.2, rate))
+        var rate = AVSpeechUtteranceDefaultSpeechRate * (0.96 + 0.12 * energy)
+        if has(["sleepy", "lazy", "calm", "wise", "old"]) { rate *= 0.95 }
+        self.rate = rate
 
-        voice = Self.pickVoice(deep: self.pitch < 0.85, high: self.pitch > 1.25, seed: job.id)
+        voice = Self.pickVoice(deep: gruff, high: !gruff, seed: job.id)
+        if let voice { print("[voice] \(voice.name) quality \(voice.quality.rawValue) pitch \(pitch)") }
     }
 
     /// The best installed English voice of a fitting register, the same one

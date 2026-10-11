@@ -141,6 +141,7 @@ final class HissDetector: @unchecked Sendable {
     private var run = 0
     private var noiseFloor: Float = 0.002
     private var cooldown = 0
+    private var logCount = 0
 
     func feed(_ buffer: AVAudioPCMBuffer) {
         guard let data = buffer.floatChannelData?[0] else { return }
@@ -156,7 +157,12 @@ final class HissDetector: @unchecked Sendable {
         // Track the room's background level so "loud enough" adapts.
         if rms < noiseFloor * 2 { noiseFloor = noiseFloor * 0.95 + rms * 0.05 }
         if cooldown > 0 { cooldown -= 1; return }
-        let hissy = zcr > 0.28 && rms > max(0.006, noiseFloor * 4)
+        // A real "shhh" centers around 2–4 kHz: a zero-crossing rate of ~0.1–0.2
+        // at 48 kHz. Vowels sit far lower (~0.01–0.05).
+        let loud = rms > max(0.004, noiseFloor * 3)
+        let hissy = zcr > 0.09 && loud
+        if loud, logCount % 6 == 0 { print(String(format: "[hiss] zcr %.3f rms %.4f floor %.4f", zcr, rms, noiseFloor)) }
+        if loud { logCount += 1 }
         run = hissy ? run + 1 : 0
         // ~0.45 s of hiss at 4096-frame buffers (48 kHz → 85 ms each).
         let needed = max(4, Int(0.45 * buffer.format.sampleRate / Double(n)))

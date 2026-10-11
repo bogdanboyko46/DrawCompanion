@@ -22,7 +22,7 @@ struct RecordingItem: Identifiable {
 @MainActor
 @Observable
 final class AppModel {
-    enum Phase: Equatable { case scanning, capturing, making, alive }
+    enum Phase: Equatable { case scanning, capturing, making, ready, alive }
 
     var phase: Phase = .scanning
     var hint = ""
@@ -56,6 +56,8 @@ final class AppModel {
     @ObservationIgnored var lastPointWalk = Date.distantPast
     /// A big emoji flash when a gesture is recognized, and the scan countdown.
     var gestureFlash: String?
+    /// The finished character, loaded but still in the paper until you clap.
+    @ObservationIgnored var pendingReveal: CharacterActor?
     var countdown: Int?
 
     var hasCharacters: Bool { !scene.actors.isEmpty }
@@ -206,10 +208,22 @@ final class AppModel {
             throw CharacterAPI.ServerError(message: job.error ?? "The character couldn't be made.")
         }
         let url = try await local.save(job, using: backend)
-        _ = try await scene.materialize(job: job, modelURL: url, page: page)
-        phase = .alive
+        // Loaded and waiting in the paper: a clap (or the button) brings it out.
+        pendingReveal = try await scene.prepare(job: job, modelURL: url, page: page)
+        phase = .ready
         hint = ""
         refreshLibrary()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    /// Brings the waiting character out of the paper.
+    func summon() {
+        guard phase == .ready, let character = pendingReveal else { return }
+        pendingReveal = nil
+        Task {
+            await scene.reveal(character, usePortal: true)
+            phase = .alive
+        }
     }
 
     private func fail(_ error: Error) {

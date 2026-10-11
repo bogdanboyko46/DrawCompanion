@@ -46,7 +46,7 @@ final class SceneController: NSObject, ARSessionDelegate {
 
         let coaching = ARCoachingOverlayView()
         coaching.session = arView.session
-        coaching.goal = .horizontalPlane
+        coaching.goal = .tracking
         coaching.activatesAutomatically = true
         coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         arView.addSubview(coaching)
@@ -177,6 +177,13 @@ final class SceneController: NSObject, ARSessionDelegate {
 
     /// Bursts the portal and brings the character to life where the drawing was.
     func materialize(job: CharacterJob, modelURL: URL, page: CapturedPage?, usePortal: Bool = true) async throws -> CharacterActor {
+        let character = try await prepare(job: job, modelURL: modelURL, page: page)
+        await reveal(character, usePortal: usePortal)
+        return character
+    }
+
+    /// Loads the character into the room, hidden, so revealing it is instant.
+    func prepare(job: CharacterJob, modelURL: URL, page: CapturedPage?) async throws -> CharacterActor {
         // To scale and in place: as tall as the figure is drawn, standing on its
         // drawn feet. Without a measurement, a 25 cm character in front of you.
         let transform = page?.feetTransform ?? page?.transform ?? placementInFront()
@@ -190,7 +197,11 @@ final class SceneController: NSObject, ARSessionDelegate {
         arView.scene.addAnchor(character.anchor)
         _ = arView.installGestures([.scale], for: character.root)
         actors.append(character)
+        return character
+    }
 
+    /// Bursts the portal (if there is one) and pops the character out.
+    func reveal(_ character: CharacterActor, usePortal: Bool) async {
         if usePortal, let portal {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 portal.dissolve {
@@ -205,7 +216,6 @@ final class SceneController: NSObject, ARSessionDelegate {
             character.appear()
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        return character
     }
 
     /// Places a saved character on the surface in the middle of the screen.

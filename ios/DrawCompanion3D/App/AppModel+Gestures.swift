@@ -18,7 +18,8 @@ extension AppModel {
         sounds.onSound = { [weak self] sound in
             switch sound {
             case .snap: self?.snapToScan()
-            case .clap: self?.cheer(flash: "👏")
+            case .clap:
+                if self?.phase == .ready { self?.flash("👏"); self?.summon() } else { self?.cheer(flash: "👏") }
             case .shush: self?.shushToTalk()
             }
         }
@@ -64,7 +65,7 @@ extension AppModel {
             flash("👋")
             for character in scene.actors { character.express("greet") }
         case .thumbsUp:
-            cheer(flash: "👍")
+            if phase == .ready { flash("👍"); summon() } else { cheer(flash: "👍") }
         case .peace:
             guard hasCharacters else { return }
             flash("✌️")
