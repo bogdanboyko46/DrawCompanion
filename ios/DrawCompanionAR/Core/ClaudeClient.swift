@@ -106,6 +106,7 @@ final class ClaudeClient {
     /// Streams the drawing; calls onStroke for each stroke as it completes.
     /// Returns how many strokes were delivered.
     func draw(page: PagePhotos, paper: PaperSize, utterances: [String], current: Outline?, action: TurnAction,
+              onPlace: ((PaperRect) async -> Void)? = nil,
               onStroke: (Stroke) async -> Void) async throws -> Int {
         let body: [String: Any] = [
             "model": config.drawModel,
@@ -125,14 +126,30 @@ final class ClaudeClient {
         // the paper, starting over would draw a second, different outline.
         var delivered = 0
         return try await withRetries("draw", canRetry: { delivered == 0 }) {
-            try await self.drawOnce(body, paper: paper) { stroke in
+            try await self.drawOnce(body, paper: paper, onPlace: onPlace) { stroke in
                 delivered += 1
                 await onStroke(stroke)
             }
         }
     }
 
-    private func drawOnce(_ body: [String: Any], paper: PaperSize, onStroke: (Stroke) async -> Void) async throws -> Int {
+    /// The "place" box from the streamed JSON, once it's complete.
+    static func placeBox(in raw: String) -> PaperRect? {
+        guard let p = raw.range(of: "\"place\"") else { return nil }
+        let rest = raw[p.upperBound...]
+        guard let b = rest.range(of: "\"box\""), let end = rest[b.upperBound...].firstIndex(of: "}") else { return nil }
+        let obj = rest[b.upperBound...end]
+        func num(_ k: String) -> Double? {
+            guard let r = obj.range(of: "\"\(k)\"") else { return nil }
+            let tail = obj[r.upperBound...].drop { $0 == ":" || $0 == " " }
+            return Double(tail.prefix { "-0123456789.".contains($0) })
+        }
+        guard let x0 = num("x0"), let y0 = num("y0"), let x1 = num("x1"), let y1 = num("y1"), x1 > x0, y1 > y0 else { return nil }
+        return PaperRect(x: x0, y: y0, w: x1 - x0, h: y1 - y0)
+    }
+
+    private func drawOnce(_ body: [String: Any], paper: PaperSize, onPlace: ((PaperRect) async -> Void)? = nil,
+                          onStroke: (Stroke) async -> Void) async throws -> Int {
         let (bytes, response) = try await session.bytes(for: request(body, beta: "server-side-fallback-2026-07-01", timeout: 60))
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             var data = Data()
@@ -141,6 +158,7 @@ final class ClaudeClient {
         }
 
         var scanner = StrokeScanner()
+        var placeSent = false
         var delivered = 0
         var raw = ""
         var stopReason: String?
@@ -155,6 +173,10 @@ final class ClaudeClient {
                 guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
                       let text = delta["text"] as? String else { continue }
                 raw += text
+                if !placeSent, let onPlace, let place = Self.placeBox(in: raw) {
+                    placeSent = true
+                    await onPlace(place)
+                }
                 for json in scanner.push(text) {
                     for stroke in PathFlattener.strokes(fromJSON: json, paper: paper) where Self.isVisible(stroke) {
                         await onStroke(stroke)

@@ -78,6 +78,9 @@ final class AppModel: ObservableObject {
     private var lastPhraseAt: TimeInterval = 0
 
     private var upgradeTask: Task<Void, Never>?
+    /// The turn the running refinement belongs to, and the turn that drew the current outline.
+    private var upgradeTurn = -1
+    private var outlineTurn = -1
     /// The tracing baseline of the current outline, to restart tracking when
     /// its strokes are swapped for the upgraded ones.
     private var trackBaseline: (gray: [Float], height: Int, paper: PaperSize)?
@@ -252,6 +255,10 @@ final class AppModel: ObservableObject {
         case let .action(action):
             turnAction = action
             if action == .hide { clearOutline() }
+        case let .place(box):
+            // The refinement needs only the words, the page and where it goes:
+            // start it now instead of after Claude's whole outline (~3-5 s sooner).
+            if turnAction == .new { startUpgrade(page: page, paper: paper, said: utterances, box: box) }
         case let .stroke(stroke):
             if let f = stroke.points.first, let w = ar.world(f), let frame = ar.session.currentFrame {
                 print("[DC] stroke \(stroke.role.rawValue) pts=\(stroke.points.count) first=\(f) img=\(String(describing: ARController.project(w, camera: frame.camera))) imgSize=\(frame.camera.imageResolution)")
@@ -266,7 +273,9 @@ final class AppModel: ObservableObject {
             rollback = nil
             if turnDrawing {
                 startTracking(baseline: baseline, paper: paper)
-                if turnAction == .new { startUpgrade(page: page, paper: paper, said: utterances) }
+                if turnAction == .new, upgradeTurn != id, let box = outline.flatMap({ UpgradeClient.bounds(of: $0.strokes) }) {
+                    startUpgrade(page: page, paper: paper, said: utterances, box: box)
+                }
             }
         }
     }
@@ -301,12 +310,12 @@ final class AppModel: ObservableObject {
     /// Asks the Mac's drawing server for a nicer version of the outline just
     /// drawn. It swaps in only if this outline is still up and you haven't
     /// traced much of it (40%); otherwise Claude's outline simply stays.
-    private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
+    private func startUpgrade(page: Data, paper: PaperSize, said: [String], box: PaperRect) {
         upgradeTask?.cancel()
         refining = false
-        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase ?? AppSettings.upgradeURL, let key = Keychain.apiKey,
-              let strokes = outline?.strokes, let box = UpgradeClient.bounds(of: strokes) else { return }
-        let revision = outlineRevision
+        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase ?? AppSettings.upgradeURL, let key = Keychain.apiKey else { return }
+        let turn = turnID
+        upgradeTurn = turn
         let id = String(format: "%04d", turnID)
         let t0 = CACurrentMediaTime()
         refining = true
@@ -320,10 +329,15 @@ final class AppModel: ObservableObject {
                 result = nil
             }
             guard let self, !Task.isCancelled else { return }
+            // Claude's draft may still be streaming in: swap once it's complete.
+            while self.inflight != nil, self.turnID == turn, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+            guard !Task.isCancelled else { return }
             self.refining = false
             let secs = CACurrentMediaTime() - t0
             guard let result else { return }
-            guard self.outlineRevision == revision, self.fadeStart == nil, var outline = self.outline else {
+            guard self.outlineTurn == turn, self.turnID == turn, self.fadeStart == nil, var outline = self.outline else {
                 print(String(format: "[DC] upgrade arrived after %.1f s but the outline changed: dropped", secs))
                 return
             }
@@ -343,8 +357,12 @@ final class AppModel: ObservableObject {
     /// Show a new outline that is still arriving. Clearing is paused until
     /// it's complete; if the turn is cancelled first, the old outline returns.
     private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle, reference: [Float]) {
-        upgradeTask?.cancel()
-        refining = false
+        // This turn's refinement may already be running (started at "place").
+        if upgradeTurn != turnID {
+            upgradeTask?.cancel()
+            refining = false
+        }
+        outlineTurn = turnID
         let previous = (outline, tracker, trackState, fadeStart, aligner, correction)
         rollback = { [weak self] in
             guard let self else { return }

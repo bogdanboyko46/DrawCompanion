@@ -32,3 +32,12 @@ final class UpgradeTokenTests: XCTestCase {
                        "d0317412277eeeb9d4dec80770260de0fdabf9fe97bfc91986685300187a8ab5")
     }
 }
+
+final class PlaceBoxTests: XCTestCase {
+    func testPlaceBoxFromPartialStream() {
+        let partial = #"{"parts":[{"name":"head","box":{"x0":1,"y0":2,"x1":3,"y1":4}}],"place":{"reason":"left of him","box":{"x0":40,"y0":120.5,"x1":260,"y1":"#
+        XCTAssertNil(ClaudeClient.placeBox(in: partial))
+        let done = partial + #"330}},"strokes":[{"#
+        XCTAssertEqual(ClaudeClient.placeBox(in: done), PaperRect(x: 40, y: 120.5, w: 220, h: 209.5))
+    }
+}
