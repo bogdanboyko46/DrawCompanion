@@ -9,10 +9,10 @@ enum Reticle {
     /// shouldn't end up at the very edge).
     static func rect(in size: CGSize) -> CGRect {
         if size.width > size.height {
-            // Landscape: on the left, clear of the panels on the right.
-            let height = size.height * 0.72
+            // Landscape: centered, leaving room for the status pill below.
+            let height = size.height * 0.68
             let width = height * 3 / 4
-            return CGRect(x: size.width * 0.36 - width / 2, y: size.height * 0.53 - height / 2, width: width, height: height)
+            return CGRect(x: (size.width - width) / 2, y: size.height * 0.46 - height / 2, width: width, height: height)
         }
         let height = min(size.width * 0.82 * 4 / 3, size.height * 0.56)
         let width = height * 3 / 4

@@ -228,6 +228,11 @@ final class AppModel {
 
     private func fail(_ error: Error) {
         errorMessage = error.localizedDescription
+        let shown = errorMessage
+        Task {
+            try? await Task.sleep(for: .seconds(8))
+            if errorMessage == shown { errorMessage = nil }
+        }
         phase = hasCharacters ? .alive : .scanning
         UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
@@ -315,8 +320,9 @@ final class AppModel {
     func takeSnapshot() {
         Task {
             if let image = await scene.snapshot() {
+                // No share sheet in AR mode: straight to Photos.
+                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                snapshot = SnapshotItem(image: image)
             }
         }
     }

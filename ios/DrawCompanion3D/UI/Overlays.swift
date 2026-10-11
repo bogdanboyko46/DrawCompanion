@@ -26,12 +26,7 @@ struct ReticleView: View {
                     .foregroundStyle(.white.opacity(0.7))
                     .position(x: r.midX, y: r.midY)
 
-                Text("Center your drawing in the frame")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(.black.opacity(0.35), in: Capsule())
-                    .position(x: r.midX, y: r.minY - 22)
+
             }
         }
     }

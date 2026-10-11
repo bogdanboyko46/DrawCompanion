@@ -49,6 +49,11 @@ extension AppModel {
     private func snapToScan() {
         guard countdown == nil, phase == .scanning || phase == .alive else { return }
         flash("🫰")
+        // After a failure, a snap retries that character instead of scanning again.
+        if failedJobID != nil {
+            retryFailed()
+            return
+        }
         // A beat to get your hand out of the shot.
         countdown = 1
         Task {
