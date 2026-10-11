@@ -197,11 +197,12 @@ final class SceneController: NSObject, ARSessionDelegate {
     }
 
     /// Loads the character into the room, hidden, so revealing it is instant.
-    func prepare(job: CharacterJob, modelURL: URL, page: CapturedPage?) async throws -> CharacterActor {
+    func prepare(job: CharacterJob, modelURL: URL, page: CapturedPage?,
+                 at override: simd_float4x4? = nil, height overrideHeight: Float? = nil) async throws -> CharacterActor {
         // To scale and in place: as tall as the figure is drawn, standing on its
         // drawn feet. Without a measurement, a 25 cm character in front of you.
-        let transform = page?.feetTransform ?? page?.transform ?? placementInFront()
-        let height = min(0.6, max(0.04, page?.figureHeight ?? 0.25))
+        let transform = override ?? page?.feetTransform ?? page?.transform ?? placementInFront()
+        let height = overrideHeight ?? min(0.6, max(0.04, page?.figureHeight ?? 0.25))
         print("[place] height \(String(format: "%.3f", height)) m, measured \(page?.measured ?? false)")
         let origin = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let character = try await CharacterActor.load(job: job, modelURL: modelURL, transform: transform, height: height)
@@ -235,6 +236,38 @@ final class SceneController: NSObject, ARSessionDelegate {
     /// Places a saved character on the surface in the middle of the screen.
     func place(job: CharacterJob, modelURL: URL) async throws -> CharacterActor {
         try await materialize(job: job, modelURL: modelURL, page: nil, usePortal: false)
+    }
+
+    /// A saved character keeps you company beside the scan frame (not over the
+    /// drawing) while a new one is being made.
+    func placeBeside(job: CharacterJob, modelURL: URL) async throws -> CharacterActor {
+        let r = Reticle.rect(in: arView.bounds.size)
+        let spot = raycast(CGPoint(x: min(arView.bounds.maxX - 40, r.maxX + r.width * 0.35), y: r.maxY - r.height * 0.15))
+        var transform: simd_float4x4?
+        if let spot {
+            var m = matrix_identity_float4x4
+            m.columns.3 = SIMD4(spot, 1)
+            transform = m
+        }
+        let character = try await prepare(job: job, modelURL: modelURL, page: nil, at: transform, height: 0.18)
+        await reveal(character, usePortal: false)
+        return character
+    }
+
+    /// Poofs a character out of the room.
+    func dismiss(_ character: CharacterActor) {
+        encounters.cancel()
+        actors.removeAll { $0 === character }
+        var t = character.root.transform
+        t.scale = SIMD3(repeating: 0.01)
+        character.root.move(to: t, relativeTo: character.anchor, duration: 0.35, timingFunction: .easeIn)
+        let puff = Entity()
+        var e = ParticleEmitterComponent.Presets.impact
+        PaperPortal.scaleToTabletop(&e)
+        puff.components.set(e)
+        puff.position = character.root.position + [0, character.height * 0.5, 0]
+        character.anchor.addChild(puff)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { character.anchor.removeFromParent() }
     }
 
     func removeAll() {

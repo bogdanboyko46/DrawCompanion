@@ -38,7 +38,8 @@ struct StatusPill: View {
             return "📸 Capturing…"
         case .making:
             let stage = GenerationStage(rawValue: model.job?.stage ?? "")?.title ?? "Starting"
-            return "\(name.map { "\($0): " } ?? "")\(stage)… \(remaining(at: date))"
+            let company = model.scene.actors.first { $0.root.isEnabled }.map { "  ·  🤫 talk to \($0.name) while you wait" } ?? ""
+            return "\(name.map { "\($0): " } ?? "")\(stage)… \(remaining(at: date))\(company)"
         case .ready:
             return "👏 Clap to bring \(name ?? "them") out of the paper"
         case .alive:

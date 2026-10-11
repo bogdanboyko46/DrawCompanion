@@ -170,11 +170,13 @@ final class Conversation {
     private static func facing(in scene: SceneController) -> CharacterActor? {
         let view = scene.arView
         let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-        let onScreen = scene.actors.compactMap { actor -> (CharacterActor, CGFloat)? in
+        // Only characters actually out in the room (one may be loaded, still hidden in the paper).
+        let present = scene.actors.filter { $0.root.isEnabled }
+        let onScreen = present.compactMap { actor -> (CharacterActor, CGFloat)? in
             guard let p = view.project(actor.headWorldPosition), view.bounds.contains(p) else { return nil }
             return (actor, hypot(p.x - center.x, p.y - center.y))
         }
-        return onScreen.min { $0.1 < $1.1 }?.0 ?? scene.actors.last
+        return onScreen.min { $0.1 < $1.1 }?.0 ?? present.last
     }
 
     // MARK: Permissions

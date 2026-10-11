@@ -85,7 +85,8 @@ extension AppModel {
     /// "Shhh" → the character listens. You talk; a pause of about 1.5 s after
     /// your last word sends it (or 6 s of nothing cancels).
     private func shushToTalk() {
-        guard phase == .alive, hasCharacters, talk.state == .idle else { return }
+        // Any time someone is out in the room, including a companion while a new one is made.
+        guard phase != .capturing, scene.actors.contains(where: { $0.root.isEnabled }), talk.state == .idle else { return }
         flash("🤫")
         startTalking()
         guard talk.state == .listening else { return }
