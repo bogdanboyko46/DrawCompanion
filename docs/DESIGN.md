@@ -74,6 +74,7 @@ Detection runs on a 960-pixel-wide copy of each frame. The pose is fit to every 
 - **Keep talking and it catches up.** If you say something while the previous phrase is still being processed, that request is cancelled (the server stops the model call, so you don't pay for it) and everything said since the last action is sent together. "Can you add…" followed by "…a flower next to the house" becomes one request.
 - **Placement is the AI's job.** It reads what's on the page, its perspective and scale, where the composition has room, and any place named in the request. The model reads positions off a labeled grid drawn on the image, which makes its coordinates much more accurate.
 - If the page isn't in view when you speak, the phrase waits and is sent as soon as the markers are seen again.
+- **When a phrase ends (iPhone).** After 1 s of silence, or 2 s if the words so far trail off ("a cat on the…", "um", a trailing comma); filler-only phrases are dropped and very long speech is cut at 40 s. The pause is adjustable in Settings, and each phrase's longest internal silence is logged (`[DC] phrase …`) to tune it. Listening survives calls, Siri, headphone changes and backgrounding, and replaces idle recognition tasks before Apple's one-minute limit (`Speech/SpeechListener.swift`, `Core/PhraseEndpointer.swift`).
 
 ### Speed
 

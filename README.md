@@ -6,7 +6,7 @@ Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 ## Two ways to run it
 
-- **iPhone app (recommended): [ios/README.md](ios/README.md).** Open `ios/DrawCompanionAR.xcodeproj` in Xcode and run it on your iPhone. The phone finds the paper on its own (no printed template), listens with Apple's speech recognition, and calls Claude directly with the key you paste into its settings. No server needed.
+- **iPhone app (recommended): [ios/README.md](ios/README.md).** Open `ios/DrawCompanionAR.xcodeproj` in Xcode and run it on your iPhone. A short welcome asks for camera and microphone access and your Claude API key (checked on the spot). The phone finds the paper on its own (no printed template), listens with Apple's speech recognition, and calls Claude directly. No server needed.
 - **Web version (below):** a Node server plus a browser page. Needs the printed template. Handy for trying ideas quickly on any phone or laptop.
 
 ## Setup
