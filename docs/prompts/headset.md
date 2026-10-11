@@ -1,4 +1,4 @@
-You are the HEADSET session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Work on branch ar/headset: check it out first (`git fetch origin ar/headset && git checkout ar/headset`) and push only there.
+You are the HEADSET session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Start from branch ar/headset (`git fetch origin ar/headset` and base your work on it). If this session assigns you a working branch, use that branch; otherwise use ar/headset. Put the branch name at the top of docs/status/headset.md so the lead can find your work.
 
 Read these first: docs/WORKSTREAMS.md (rules and who owns which file; follow it strictly), ios/README.md, docs/DESIGN.md, then the files you own: ios/DrawCompanionAR/AR/Renderer.swift, AR/Shaders.metal, AR/CameraView.swift, UI/HeadsetOverlay.swift.
 

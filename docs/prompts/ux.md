@@ -1,4 +1,4 @@
-You are the UX session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Work on branch ar/ux: check it out first (`git fetch origin ar/ux && git checkout ar/ux`) and push only there.
+You are the UX session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Start from branch ar/ux (`git fetch origin ar/ux` and base your work on it). If this session assigns you a working branch, use that branch; otherwise use ar/ux. Put the branch name at the top of docs/status/ux.md so the lead can find your work.
 
 Read these first: docs/WORKSTREAMS.md (rules and who owns which file; follow it strictly), ios/README.md, docs/DESIGN.md, then the files you own: ios/DrawCompanionAR/Speech/SpeechListener.swift, UI/ContentView.swift, UI/SettingsView.swift, App/Keychain.swift, App/DrawCompanionApp.swift, plus assets/app icon, README.md, ios/README.md and docs/ (except WORKSTREAMS.md).
 

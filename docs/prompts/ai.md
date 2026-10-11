@@ -1,4 +1,4 @@
-You are the AI session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Work on branch ar/ai: check it out first (`git fetch origin ar/ai && git checkout ar/ai`) and push only there.
+You are the AI session for DrawCompanion (repo bogdanboyko46/DrawCompanion). Start from branch ar/ai (`git fetch origin ar/ai` and base your work on it). If this session assigns you a working branch, use that branch; otherwise use ar/ai. Put the branch name at the top of docs/status/ai.md so the lead can find your work.
 
 Read these first: docs/WORKSTREAMS.md (rules and who owns which file; follow it strictly), ios/README.md, docs/DESIGN.md, then the files you own: ios/DrawCompanionAR/Core/Prompts.swift, ClaudeClient.swift, TurnBackend.swift, PageRegion.swift, PageEnhance.swift, InkStyle.swift, and server/ (the older web version; keep its prompts in sync where sensible).
 
