@@ -48,6 +48,11 @@ final class AppModel: ObservableObject {
     /// When the drawing aligner last locked on. If it loses the drawing for a
     /// while (page moved far, looking away), paper-edge detection takes over again.
     private var lastLock: TimeInterval = 0
+    /// The previous small reading, so the outline only moves when two in a row agree.
+    private var lastReading: Affine2?
+    /// Where the page was in the camera image at the last alignment, to skip
+    /// frames taken while the head moves fast (blurry, and the match wobbles).
+    private var lastAlignCorners: [CGPoint]?
     private let alignQueue = DispatchQueue(label: "drawcompanion.align", qos: .userInitiated)
     private static let alignWidth = 480
     private var trackState: CompletionTracker.State?
@@ -247,6 +252,8 @@ final class AppModel: ObservableObject {
         // The new outline's coordinates refer to this exact photo: align to it.
         aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
         correction = .identity
+        lastReading = nil
+        pendingJump = nil
         // From now on the drawing decides where the page is; paper-edge
         // detection (noisy on folded or curled paper) only takes over again if
         // the drawing is lost for a while.
@@ -318,6 +325,11 @@ final class AppModel: ObservableObject {
         if ar.followDrawing, CACurrentMediaTime() - lastLock > 3 { ar.followDrawing = false }
         guard let aligner, !aligning, fadeStart == nil, let frame = ar.session.currentFrame,
               let corners = ar.imageCorners(in: frame) else { return }
+        defer { lastAlignCorners = corners }
+        if let last = lastAlignCorners {
+            let moved = zip(last, corners).map { hypot($0.x - $1.x, $0.y - $1.y) }.max() ?? 0
+            if moved > frame.camera.imageResolution.width * 0.015 { return }
+        }
         aligning = true
         let pixelBuffer = frame.capturedImage
         let prior = correction
@@ -335,13 +347,14 @@ final class AppModel: ObservableObject {
                 // The page was re-pinned since this started: the reading is stale.
                 guard self.ar.version == version else {
                     print("[DC] align: dropped (page moved meanwhile)")
+                    self.lastReading = nil
                     return
                 }
                 guard self.aligner === aligner, let found else {
                     print("[DC] align: no match")
                     return
                 }
-                let jump = hypot(found.tx - prior.tx, found.ty - prior.ty)
+                let jump = Self.movement(found, w, h)
                 if jump > 12 {
                     // Accept a big change only when the next reading agrees with it.
                     if let pending = self.pendingJump, hypot(found.tx - pending.tx, found.ty - pending.ty) < 5 {
@@ -357,12 +370,34 @@ final class AppModel: ObservableObject {
                 }
                 self.pendingJump = nil
                 self.lastLock = CACurrentMediaTime()
-                print(String(format: "[DC] align: shift %.1f,%.1f px  scale %.3f  rot %.3f", found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
-                // Follow quickly; a little smoothing hides measurement jitter.
-                self.correction = self.correction.blended(toward: found, by: 0.8)
+                // Readings of a still page differ by up to about a pixel (under a
+                // millimeter). Moving the outline on each one made it shimmer, so
+                // it holds perfectly still until the drift is real: bigger than
+                // that, and seen by two readings in a row that agree.
+                let previous = self.lastReading
+                self.lastReading = found
+                guard jump > 1.2, let previous, Self.movement(previous, w, h) > 1.2,
+                      Self.distance(previous, found, w, h) < 1.5 else { return }
+                self.lastReading = nil
+                print(String(format: "[DC] align: move %.1f px  shift %.1f,%.1f  scale %.3f  rot %.3f", jump, found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
+                self.correction = previous.blended(toward: found, by: 0.5)
                 self.repinToDrawing()
             }
         }
+    }
+
+    /// How far (alignment pixels) a map moves the page: the largest shift
+    /// among points spread over it.
+    nonisolated private static func movement(_ t: Affine2, _ w: Int, _ h: Int) -> Double {
+        distance(.identity, t, w, h)
+    }
+
+    nonisolated private static func distance(_ p: Affine2, _ q: Affine2, _ w: Int, _ h: Int) -> Double {
+        [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)].map { u, v in
+            let x = u * Double(w), y = v * Double(h)
+            let a = p.apply(x, y), b = q.apply(x, y)
+            return hypot(a.0 - b.0, a.1 - b.1)
+        }.max() ?? 0
     }
 
     /// Moves ARKit's page so the drawing sits exactly where it was measured,
@@ -380,6 +415,7 @@ final class AppModel: ObservableObject {
         lastLock = CACurrentMediaTime()
         correction = .identity
         pendingJump = nil
+        lastReading = nil
     }
 
     /// One pair of alignment images per outline, saved for debugging

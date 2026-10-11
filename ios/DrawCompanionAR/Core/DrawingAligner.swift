@@ -129,19 +129,31 @@ final class DrawingAligner {
             }
         }
 
-        // 2. Refine all six parameters by coordinate descent with shrinking steps.
-        var steps: [Double] = [0.02, 0.02, 1, 0.02, 0.02, 1] // a, b, tx, c, d, ty
-        for _ in 0..<8 {
+        // 2. Refine shift, rotation and uniform scale by coordinate descent with
+        //    shrinking steps. A flat page seen top-down only needs these; letting
+        //    shear and uneven stretch float too fitted measurement noise and made
+        //    the outline wobble at its edges.
+        func similarity(_ p: [Double]) -> Affine2 {
+            let (s, r) = (p[0], p[1])
+            return Affine2(a: s * cos(r), b: -s * sin(r), tx: p[2], c: s * sin(r), d: s * cos(r), ty: p[3])
+        }
+        var params = [sqrt(max(1e-6, best.a * best.d - best.b * best.c)), atan2(best.c - best.b, best.a + best.d), best.tx, best.ty]
+        best = similarity(params)
+        bestScore = score(points, best)
+        var steps: [Double] = [0.01, 0.01, 1, 1] // scale, rotation (rad), tx, ty
+        for _ in 0..<10 {
             for _ in 0..<4 {
                 var improved = false
-                for k in 0..<6 {
+                for k in 0..<4 {
                     for sign in [1.0, -1.0] {
-                        var t = best
-                        t[k] += sign * steps[k]
+                        var p = params
+                        p[k] += sign * steps[k]
+                        let t = similarity(p)
                         let s = score(points, t)
                         if s < bestScore {
                             bestScore = s
                             best = t
+                            params = p
                             improved = true
                         }
                     }
@@ -178,10 +190,18 @@ final class DrawingAligner {
     /// Added to coordinates before looking up the distance (centered search).
     private var offset = (0.0, 0.0)
 
+    /// Interpolated between pixels, so the score changes smoothly as the map
+    /// moves by a fraction of a pixel. Rounding to the nearest pixel made the
+    /// answer jump around by a pixel or more from frame to frame.
     private func sample(_ x: Double, _ y: Double) -> Float {
-        let xi = Int((x + offset.0).rounded()), yi = Int((y + offset.1).rounded())
-        guard xi >= 0, yi >= 0, xi < width, yi < height else { return cap }
-        return min(cap, distance[yi * width + xi])
+        let fx = x + offset.0, fy = y + offset.1
+        let x0 = Int(fx.rounded(.down)), y0 = Int(fy.rounded(.down))
+        guard x0 >= 0, y0 >= 0, x0 < width - 1, y0 < height - 1 else { return cap }
+        let u = Float(fx - Double(x0)), v = Float(fy - Double(y0))
+        let i = y0 * width + x0
+        let top = distance[i] + (distance[i + 1] - distance[i]) * u
+        let bottom = distance[i + width] + (distance[i + width + 1] - distance[i + width]) * u
+        return min(cap, top + (bottom - top) * v)
     }
 
     // MARK: image helpers
