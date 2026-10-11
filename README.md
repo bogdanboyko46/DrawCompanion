@@ -23,7 +23,7 @@ An AR drawing assistant. You draw on real paper wearing a lightweight headset (y
 3. Trace it. Once you've traced part of it and then left it alone for 3 seconds, it fades away.
 4. Wave an open hand at the camera to turn the mic off (a big mic symbol flashes). Wave again to turn it back on. Press and hold anywhere for Settings.
 
-What makes it work: the page is found with Vision and pinned in 3D (on dark or glossy desks, its height comes from the LiDAR depth sensor); while you draw, the app compares the camera image with the photo the AI drew on and keeps the outline on your actual pencil lines to within about a millimeter, gliding to each correction instead of jumping.
+What makes it work: the page is found with Vision and pinned in 3D (on dark or glossy desks, its height comes from the LiDAR depth sensor); while you draw, the app compares the camera image with the photo the AI drew on and keeps the outline on your actual pencil lines to within a few millimeters, gliding to each correction instead of jumping.
 
 Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
