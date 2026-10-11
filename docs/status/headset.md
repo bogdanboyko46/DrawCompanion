@@ -2,7 +2,13 @@
 
 **Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`)
 
-## Done (CI status per item below)
+## READY TO MERGE
+
+Items 1–6 below: CI green on `29a3b0f` (run https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38098105344: core tests incl. new `HeadsetTests`, iPhone build with no new warnings, web tests). Touches only my files plus new `Core/Headset*.swift` and `CoreTests/HeadsetTests.swift`. No changes needed in AppModel (the `Renderer.Scene` interface is unchanged).
+
+Not verifiable in CI (needs the phone): GPU runtime behavior. If the camera view is black, look for `[DC] renderer: pipeline … failed` in the console.
+
+## Done
 
 1. **Lens pre-distortion.** The scene (camera + outline) is rendered once into a square "eye texture" covering ±40° around the lens axis, then drawn into each half of the screen through a barrel pre-distortion shader (`distortFragment`, radial k1/k2 model). Cardboard v1 defaults: k1 0.441, k2 0.156, screen-to-lens 42 mm, lens separation 60 mm, 460 ppi. Outside each lens's field is black with a soft edge. Math in `Core/HeadsetOptics.swift`, tested in `CoreTests/HeadsetTests.swift` (incl. "a straight line in what the eye sees is bowed on screen and comes back straight through the lens").
 2. **Eye layout / IPD / zoom** as settings (UserDefaults keys below). Eye texture is sized to match screen sharpness at the lens center (~1280 px on an iPhone 17 Pro) and mipmapped so lines don't shimmer at the edges.
