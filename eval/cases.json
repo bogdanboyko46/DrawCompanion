@@ -1,0 +1,88 @@
+{
+  "_doc": "Hand-labeled from eval/photos (paper units: page 1000 wide, origin top-left). Boxes are [x0, y0, x1, y1]. See eval/README.md.",
+  "pages": {
+    "page-1": {
+      "photo": "photos/page-1.jpg", "paper": { "w": 1000, "h": 465 }, "note": "dim, grey-yellow light",
+      "parts": {
+        "head": [340, 70, 503, 183], "hair": [358, 52, 490, 88], "left ear": [285, 98, 350, 148], "right ear": [497, 95, 550, 145],
+        "flag": [543, 53, 575, 152], "eyes": [402, 93, 455, 115], "smile": [407, 130, 442, 165],
+        "left leg": [372, 158, 408, 252], "right leg": [445, 163, 480, 242]
+      }
+    },
+    "page-2": {
+      "photo": "photos/page-2.jpg", "paper": { "w": 1000, "h": 444 }, "note": "white, strong blue shadow on the right",
+      "parts": {
+        "head": [345, 68, 500, 183], "hair": [365, 52, 495, 92], "left ear": [290, 100, 352, 148], "right ear": [495, 95, 547, 147],
+        "flag": [537, 55, 575, 153], "eyes": [403, 98, 455, 120], "smile": [407, 130, 440, 165],
+        "left leg": [368, 172, 402, 245], "right leg": [442, 163, 472, 237]
+      }
+    },
+    "page-3": {
+      "photo": "photos/page-3.jpg", "paper": { "w": 1000, "h": 445 }, "note": "white, blue shadow bottom right",
+      "parts": {
+        "head": [372, 85, 530, 197], "hair": [387, 68, 527, 105], "left ear": [317, 117, 377, 165], "right ear": [523, 105, 575, 158],
+        "flag": [567, 72, 602, 167], "eyes": [430, 108, 483, 130], "smile": [435, 145, 468, 178],
+        "left leg": [398, 177, 437, 263], "right leg": [470, 188, 500, 252]
+      }
+    }
+  },
+  "draw": [
+    { "id": "p3-third-leg", "page": "page-3", "said": ["can you add a third leg"], "target": [[360, 185, 560, 320]], "avoid": ["left leg", "right leg", "smile", "eyes"], "why": "seen on the phone: drawn on top of an existing leg" },
+    { "id": "p3-nose", "page": "page-3", "said": ["can you add a nose?"], "target": [[425, 110, 490, 160]], "avoid": ["left ear", "right ear", "flag", "left leg", "right leg"], "maxSize": 80, "why": "seen on the phone: nose on an eye" },
+    { "id": "p3-teeth", "page": "page-3", "said": ["can you add teeth to the smile?"], "target": [[420, 135, 485, 190]], "touch": "smile", "avoid": ["eyes", "left leg", "right leg", "hair"], "maxSize": 80 },
+    { "id": "p3-hat", "page": "page-3", "said": ["give him a hat"], "target": [[360, 0, 560, 90]], "touch": "hair", "avoid": ["eyes", "smile", "left leg", "right leg"] },
+    { "id": "p3-sun-corner", "page": "page-3", "said": ["draw a sun in the top right corner"], "target": [[720, 0, 1000, 170]], "avoid": "all" },
+    { "id": "p3-flower-bottom-left", "page": "page-3", "said": ["add a flower in the bottom left"], "target": [[0, 230, 330, 445]], "avoid": "all" },
+    { "id": "p3-ball-right", "page": "page-3", "said": ["put a ball on the ground to the right of his legs"], "target": [[495, 180, 700, 330]], "avoid": ["left leg", "right leg", "flag", "head"] },
+    { "id": "p3-flag-left", "page": "page-3", "said": ["he should hold a second flag on the other side"], "target": [[200, 20, 345, 200]], "avoid": ["head", "eyes", "smile", "left leg"] },
+    { "id": "p3-tree-left", "page": "page-3", "said": ["I'm stuck", "maybe a tree to the left of him?"], "target": [[0, 0, 315, 445]], "avoid": "all" },
+    { "id": "p1-third-eye", "page": "page-1", "said": ["add a third eye"], "target": [[395, 65, 465, 128]], "avoid": ["smile", "left ear", "right ear", "flag", "left leg", "right leg"], "maxSize": 60 },
+    { "id": "p1-house-right", "page": "page-1", "said": ["draw a house on the right side of the page"], "target": [[600, 0, 1000, 465]], "avoid": "all" },
+    { "id": "p1-shoes", "page": "page-1", "said": ["can you give him shoes"], "target": [[345, 215, 510, 300]], "touch": "left leg", "avoid": ["head", "smile", "eyes"] },
+    { "id": "p1-speech", "page": "page-1", "said": ["add a speech bubble where he says hi"], "target": [[0, 0, 1000, 465]], "avoid": "all" },
+    { "id": "p2-cloud-above", "page": "page-2", "said": ["draw a cloud above him"], "target": [[250, 0, 680, 60]], "avoid": ["head", "eyes", "smile", "left ear", "right ear"] },
+    { "id": "p2-dog-beside", "page": "page-2", "said": ["add a dog next to him"], "target": [[0, 60, 285, 444], [580, 60, 1000, 444]], "avoid": "all" },
+    { "id": "p2-grass", "page": "page-2", "said": ["put some grass under his feet"], "target": [[300, 225, 620, 330]], "avoid": ["head", "smile", "eyes", "left ear", "right ear"] },
+    { "id": "p3-rev-bigger", "page": "page-3", "said": ["bigger"], "history": ["draw a sun in the top right corner"],
+      "current": [{ "role": "contour", "weight": "medium", "d": "M 820 80 C 820 27 900 27 900 80 C 900 133 820 133 820 80 Z" }],
+      "revise": { "minScale": 1.25, "maxShift": 60 } },
+    { "id": "p3-rev-move-left", "page": "page-3", "said": ["move it to the left a bit"], "history": ["give him a hat"],
+      "current": [{ "role": "contour", "weight": "medium", "d": "M 400 75 L 540 75" }, { "role": "contour", "weight": "medium", "d": "M 425 75 C 425 25 515 25 515 75" }],
+      "revise": { "dx": [-200, -10], "maxDy": 35, "minScale": 0.7, "maxScale": 1.4 } },
+    { "id": "p3-rev-smaller", "page": "page-3", "said": ["make it smaller"], "history": ["can you add a third leg"],
+      "current": [{ "role": "contour", "weight": "medium", "d": "M 440 200 C 425 230 425 260 445 268 C 465 270 470 240 460 200" }],
+      "revise": { "maxScale": 0.85, "maxShift": 50 } }
+  ],
+  "filter": [
+    { "said": ["can you add teeth to the smile?"], "history": ["add an arm"], "expect": "new", "why": "seen on the phone: classified as revise of the arm" },
+    { "said": ["give him a hat"], "history": ["add a third leg"], "expect": "new" },
+    { "said": ["now add a nose"], "history": ["add a third eye"], "expect": "new" },
+    { "said": ["can you draw a sun too"], "history": ["add a tree on the left"], "expect": "new" },
+    { "said": ["bigger"], "history": ["draw a sun"], "expect": "revise" },
+    { "said": ["move it up a bit"], "history": ["give him a hat"], "expect": "revise" },
+    { "said": ["no, a pine tree"], "history": ["add a tree on the left"], "expect": "revise" },
+    { "said": ["make the arm longer"], "history": ["add an arm"], "expect": "revise" },
+    { "said": ["can you make it face left"], "history": ["draw a dog next to him"], "expect": "revise" },
+    { "said": ["make it a cat instead"], "history": ["draw a dog next to him"], "expect": "revise" },
+    { "said": ["smaller please"], "history": ["add a flower"], "expect": "revise" },
+    { "said": ["clear it"], "history": ["add a flower"], "expect": "hide" },
+    { "said": ["ok I've got it"], "history": ["add a flower"], "expect": "hide" },
+    { "said": ["never mind"], "history": ["add a hat"], "expect": "hide" },
+    { "said": ["hmm, the roof came out nice"], "history": null, "expect": "ignore" },
+    { "said": ["mom, I'll be down in a minute"], "history": null, "expect": "ignore" },
+    { "said": ["I want to make dinner later"], "history": null, "expect": "ignore" },
+    { "said": ["um"], "history": null, "expect": "ignore" },
+    { "said": ["this pencil is so blunt"], "history": ["add a flower"], "expect": "ignore" },
+    { "said": ["okay now I'm tracing the petals"], "history": ["add a flower"], "expect": "ignore" },
+    { "said": ["can you add a third leg"], "history": null, "expect": "new" },
+    { "said": ["I'm stuck", "maybe a cat on the windowsill?"], "history": null, "expect": "new" },
+    { "said": ["what if there was a tree here"], "history": null, "expect": "new" },
+    { "said": ["give him a hat"], "history": null, "expect": "new" },
+    { "said": ["can you add teeth to the smile?"], "history": null, "expect": "new" },
+    { "said": ["draw a sun in the corner"], "history": null, "expect": "new" },
+    { "said": ["add shoes to him"], "history": ["add a hat"], "expect": "new" },
+    { "said": ["put a ball next to his feet"], "history": ["add some grass"], "expect": "new" },
+    { "said": ["and the hat should be red"], "history": ["give him a hat"], "expect": "revise" },
+    { "said": ["make his ears bigger"], "history": ["add a hat"], "expect": "new", "why": "the ears are their drawing, not the outline: a new outline for bigger ears" }
+  ]
+}

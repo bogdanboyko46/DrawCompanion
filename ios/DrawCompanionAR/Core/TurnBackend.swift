@@ -8,20 +8,100 @@ protocol TurnBackend {
 }
 
 /// The real thing: Haiku filter, then streamed Sonnet drawing.
+///
+/// Speed: when the words sound like a drawing request, the drawing call starts
+/// at the same time as the filter instead of after it, which saves the
+/// filter's whole round trip (~1 s) before the first line. Its strokes are
+/// held back until the filter agrees; if the filter says ignore or hide (or
+/// picks the other of new/revise), the speculative call is cancelled, which
+/// stops billing for it. Chatter that doesn't sound like a request never
+/// starts one, so an always-on mic doesn't pay for it.
 struct ClaudeBackend: TurnBackend {
     let client: ClaudeClient
+    var speculate = true
 
     func run(utterances: [String], current: Outline?, page: PagePhotos, paper: PaperSize,
              emit: @escaping (TurnEvent) async -> Void) async throws {
-        let (action, note) = try await client.classify(utterances: utterances, current: current)
-        print("[DC] filter: \(action.rawValue) (\(note)) for \(utterances)")
-        await emit(.action(action))
-        if action == .new || action == .revise {
-            let n = try await client.draw(page: page, paper: paper, utterances: utterances,
-                                      current: current, action: action) { await emit(.stroke($0)) }
-            print("[DC] draw: \(n) strokes")
+        let guess = speculate ? Speculation.guess(utterances: utterances, hasOutline: current != nil) : nil
+        let gate = StrokeGate()
+        let early: Task<Int, Error>? = guess.map { action in
+            Task {
+                try await client.draw(page: page, paper: paper, utterances: utterances, current: current, action: action) {
+                    await gate.push($0)
+                }
+            }
         }
-        await emit(.done)
+        try await withTaskCancellationHandler {
+            let decision: (action: TurnAction, note: String)
+            do {
+                decision = try await client.classify(utterances: utterances, current: current)
+            } catch {
+                early?.cancel()
+                throw error
+            }
+            let (action, note) = decision
+            print("[DC] filter: \(action.rawValue) (\(note)) for \(utterances)\(guess.map { ", speculated \($0.rawValue)" } ?? "")")
+            await emit(.action(action))
+            if action == .new || action == .revise {
+                let n: Int
+                if let early, action == guess {
+                    await gate.open { await emit(.stroke($0)) }
+                    n = try await early.value
+                } else {
+                    early?.cancel()
+                    n = try await client.draw(page: page, paper: paper, utterances: utterances,
+                                              current: current, action: action) { await emit(.stroke($0)) }
+                }
+                print("[DC] draw: \(n) strokes")
+            } else {
+                early?.cancel()
+            }
+            await emit(.done)
+        } onCancel: {
+            early?.cancel() // the user kept talking: stop paying for this one too
+        }
+    }
+}
+
+/// Holds strokes from a speculative drawing call until the filter agrees,
+/// then passes them on in order (buffered ones first).
+actor StrokeGate {
+    private var buffer: [Stroke] = []
+    private var sink: ((Stroke) async -> Void)?
+
+    func push(_ stroke: Stroke) async {
+        if let sink { await sink(stroke) } else { buffer.append(stroke) }
+    }
+
+    func open(_ sink: @escaping (Stroke) async -> Void) async {
+        // Strokes pushed while this drains land in the buffer and are drained too.
+        while !buffer.isEmpty { await sink(buffer.removeFirst()) }
+        self.sink = sink
+    }
+}
+
+/// Decides, from the words alone and before the filter answers, whether to
+/// start drawing right away and as which action.
+enum Speculation {
+    private static let requestWords: Set<String> = [
+        "add", "draw", "put", "make", "give", "show", "sketch", "stuck", "suggest", "need", "want",
+        "bigger", "smaller", "larger", "move", "instead", "turn", "change", "another", "more",
+    ]
+    private static let reviseWords: Set<String> = [
+        "bigger", "smaller", "larger", "move", "instead", "turn", "rounder", "thinner", "thicker", "wider",
+        "taller", "shorter", "left", "right", "up", "down", "higher", "lower", "rotate", "flip", "it",
+    ]
+    private static let stopWords: Set<String> = ["clear", "hide", "remove", "erase"]
+
+    static func guess(utterances: [String], hasOutline: Bool) -> TurnAction? {
+        let said = utterances.joined(separator: " ").lowercased()
+        let words = Set(said.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty })
+        guard !words.isDisjoint(with: requestWords), words.isDisjoint(with: stopWords),
+              !said.contains("never mind"), !said.contains("got it") else { return nil }
+        guard hasOutline else { return .new }
+        // "add a hat" with an outline shown is usually something new; "make it bigger" a revision.
+        let adding = !words.isDisjoint(with: ["add", "draw", "put", "give", "another"])
+        return adding || words.isDisjoint(with: reviseWords) ? .new : .revise
     }
 }
 
