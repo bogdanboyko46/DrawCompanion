@@ -110,7 +110,7 @@ final class ARController: NSObject, ARSessionDelegate {
 
     /// Page corners in normalized image coordinates (origin top-left),
     /// ordered top-left, top-right, bottom-right, bottom-left.
-    enum Miss: String, Error { case noPage = "no page seen", lowConfidence = "page unsure", cutOff = "page cut off by the view edge", odd = "odd corners" }
+    enum Miss: String, Error { case noPage = "no page seen", lowConfidence = "page unsure", cutOff = "page cut off by the view edge", odd = "odd corners", notPaper = "shape isn't all paper" }
 
     static func detectPage(in pixelBuffer: CVPixelBuffer) -> Result<[CGPoint], Miss> {
         let request = VNDetectDocumentSegmentationRequest()
@@ -134,7 +134,39 @@ final class ARController: NSObject, ARSessionDelegate {
         let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
         let bl = pts.min { $0.x - $0.y < $1.x - $1.y }!
         let ordered = [tl, tr, br, bl]
-        return Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 ? .success(ordered) : .failure(.odd)
+        guard Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 else { return .failure(.odd) }
+        // Vision sometimes outlines a strip of paper plus the desk below it;
+        // pinning that put the AI's photo mostly on the desk. Paper is evenly bright.
+        guard Self.mostlyPaper(pixelBuffer, quad: ordered) else { return .failure(.notPaper) }
+        return .success(ordered)
+    }
+
+    /// True when nearly all of the quad's inside is as bright as paper (luma,
+    /// sampled on a grid, compared with the brightest part of the inside).
+    static func mostlyPaper(_ pixelBuffer: CVPixelBuffer, quad q: [CGPoint]) -> Bool {
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 1 else { return true }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return true }
+        let w = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), h = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let row = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let luma = base.assumingMemoryBound(to: UInt8.self)
+        var values: [Int] = []
+        for i in 0..<12 {
+            for j in 0..<12 {
+                // Bilinear position inside the quad, kept 8% away from its edges.
+                let u = 0.08 + 0.84 * (Double(i) + 0.5) / 12, v = 0.08 + 0.84 * (Double(j) + 0.5) / 12
+                let top = CGPoint(x: q[0].x + (q[1].x - q[0].x) * u, y: q[0].y + (q[1].y - q[0].y) * u)
+                let bottom = CGPoint(x: q[3].x + (q[2].x - q[3].x) * u, y: q[3].y + (q[2].y - q[3].y) * u)
+                let x = Int((top.x + (bottom.x - top.x) * v) * CGFloat(w)), y = Int((top.y + (bottom.y - top.y) * v) * CGFloat(h))
+                guard x >= 0, y >= 0, x < w, y < h else { continue }
+                values.append(Int(luma[y * row + x]))
+            }
+        }
+        guard values.count > 50 else { return false }
+        let bright = values.sorted()[values.count * 9 / 10]
+        let paperLike = values.filter { Double($0) >= Double(bright) * 0.55 }.count
+        return Double(paperLike) / Double(values.count) >= 0.85
     }
 
     private func miss(_ why: String, _ frame: ARFrame) {
