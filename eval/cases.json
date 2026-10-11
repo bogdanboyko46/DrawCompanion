@@ -42,6 +42,8 @@
     { "id": "p1-speech", "page": "page-1", "said": ["add a speech bubble where he says hi"], "target": [[0, 0, 1000, 465]], "avoid": "all" },
     { "id": "p2-cloud-above", "page": "page-2", "said": ["draw a cloud above him"], "target": [[250, 0, 680, 60]], "avoid": ["head", "eyes", "smile", "left ear", "right ear"] },
     { "id": "p2-dog-beside", "page": "page-2", "said": ["add a dog next to him"], "target": [[0, 60, 285, 444], [580, 60, 1000, 444]], "avoid": "all" },
+    { "id": "p2-cat-beside", "page": "page-2", "said": ["can you draw a cat next to him"], "target": [[0, 60, 285, 444], [580, 60, 1000, 444]], "avoid": "all" },
+    { "id": "p1-bike-right", "page": "page-1", "said": ["add a bicycle on the right"], "target": [[600, 0, 1000, 465]], "avoid": "all" },
     { "id": "p2-grass", "page": "page-2", "said": ["put some grass under his feet"], "target": [[300, 225, 620, 330]], "avoid": ["head", "smile", "eyes", "left ear", "right ear"] },
     { "id": "p3-rev-bigger", "page": "page-3", "said": ["bigger"], "history": ["draw a sun in the top right corner"],
       "current": [{ "role": "contour", "weight": "medium", "d": "M 820 80 C 820 27 900 27 900 80 C 900 133 820 133 820 80 Z" }],

@@ -31,8 +31,11 @@ enum Prompts {
 
     How to draw it:
     - Continue THEIR drawing. Match subject matter, scale, perspective, line weight, and level of detail. A loose sketch gets a loose suggestion; a careful study gets careful lines.
-    - Order matters: strokes appear on the paper one by one as you write them. Write construction strokes first (simple shapes that set size and placement), then contours, then a little detail. Skip shading unless asked. If they ask for just guidelines, write only construction strokes.
-    - Prefer fewer, confident strokes, each a smooth path built from curves.
+    - A whole new object (an animal, person, vehicle, plant, building) must be complete and recognizable. Before writing strokes, name its main parts (a cat: head, ears, body, four legs, tail; a bicycle: two wheels, frame, seat, handlebars, pedals) and draw every one of them, in correct proportion, joined where they meet: the head sits on or overlaps the body, legs start at the body and reach the ground, a tail grows out of the back. No floating parts, no gaps between parts that touch.
+    - Its contour strokes alone must read as the finished drawing: closed shapes, clean joins, the silhouette someone would trace. Construction strokes are optional faint helpers; use them only for a careful, proportional study, never instead of a contour, and skip them for simple doodles.
+    - Adding a part to their drawing (teeth, a hat, an eye, a leg) is just that part, sized and attached like its neighbors; don't redraw or trace over their lines.
+    - Order matters: strokes appear on the paper one by one as you write them. Draw the biggest shape first (body or main mass), then the parts attached to it, then a little detail. Skip shading unless asked. If they ask for just guidelines, write only construction strokes.
+    - Prefer fewer, confident strokes, each a smooth path built from curves. Use the shapes a good illustrator would: a cat has a rounded body, pointed ears, a curved tail; not just ovals and sticks.
     - When revising, change what they asked for and keep everything else (placement, size, style) the same.
     - Coordinates must be accurate: use the grid labels to place points. Points must stay inside the page.
     """
