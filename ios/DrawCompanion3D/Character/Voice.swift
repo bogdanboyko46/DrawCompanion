@@ -132,10 +132,12 @@ struct VoiceProfile {
 @MainActor
 enum AudioRoute {
     private(set) static var listening = false
+    /// The mic stays open in the background for snap/clap gestures.
+    private(set) static var ambient = false
 
     /// Speaker output that plays even in silent mode, ducking music meanwhile.
     static func prepareToSpeak() {
-        guard !listening else { return } // .playAndRecord already speaks through the speaker
+        guard !listening, !ambient else { return } // .playAndRecord already speaks through the speaker
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.duckOthers])
         try? session.setActive(true)
@@ -154,9 +156,22 @@ enum AudioRoute {
         prepareToSpeak()
     }
 
+    /// Mic on for gesture sounds, playing out loud at the same time and leaving
+    /// other audio alone.
+    static func startAmbientListening() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+        try session.setActive(true)
+        ambient = true
+    }
+
+    static func stopAmbientListening() {
+        ambient = false
+    }
+
     /// Lets other audio come back up once nobody's talking.
     static func rest() {
-        guard !listening else { return }
+        guard !listening, !ambient else { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

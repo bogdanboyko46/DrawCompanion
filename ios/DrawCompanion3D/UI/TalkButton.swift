@@ -58,9 +58,9 @@ struct TalkButton: View {
         .contentShape(Circle())
         // Pressing starts listening and letting go sends; dragging far off cancels into a send too.
         .onLongPressGesture(minimumDuration: 60, maximumDistance: 120) {
-            talk.release()
+            model.stopTalking()
         } onPressingChanged: { pressing in
-            if pressing { talk.press(in: model.scene) } else { talk.release() }
+            if pressing { model.startTalking() } else { model.stopTalking() }
         }
         .accessibilityLabel("Talk to your character")
         .accessibilityHint("Hold while you speak, then let go.")

@@ -50,6 +50,13 @@ final class AppModel {
     @ObservationIgnored private var speechTimers: [String: Task<Void, Never>] = [:]
     /// Hold-to-talk with the character in the room (observable on its own).
     @ObservationIgnored let talk = Conversation()
+    /// Hands-free control: snap/clap (sound) and hand poses (camera).
+    @ObservationIgnored let sounds = SoundGestures()
+    @ObservationIgnored let hands = HandGestures()
+    @ObservationIgnored var lastPointWalk = Date.distantPast
+    /// A big emoji flash when a gesture is recognized, and the scan countdown.
+    var gestureFlash: String?
+    var countdown: Int?
 
     var hasCharacters: Bool { !scene.actors.isEmpty }
 
@@ -76,6 +83,7 @@ final class AppModel {
         }
         scene.onSpeak = { [weak self] character, text in self?.say(text, by: character) }
         scene.encounters.onThinking = { [weak self] character, on in self?.think(on, by: character) }
+        setUpGestures()
         refreshLibrary()
     }
 

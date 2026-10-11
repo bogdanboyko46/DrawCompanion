@@ -58,6 +58,21 @@ final class SceneController: NSObject, ARSessionDelegate {
         }
     }
 
+    /// Every camera frame (for hand gestures). Don't hold on to the frame.
+    var onFrame: ((ARFrame) -> Void)?
+
+    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        MainActor.assumeIsolated { self.onFrame?(frame) }
+    }
+
+    /// Maps Vision-normalized points in this frame to points on screen.
+    func viewMapper(for frame: ARFrame) -> (CGPoint) -> CGPoint {
+        frame.viewPointMapper(orientation: interfaceOrientation, viewport: arView.bounds.size)
+    }
+
+    /// The surface point under a screen point, if any.
+    func surfacePoint(at point: CGPoint) -> SIMD3<Float>? { raycast(point) }
+
     private var interfaceOrientation: UIInterfaceOrientation {
         arView.window?.windowScene?.interfaceOrientation ?? .portrait
     }

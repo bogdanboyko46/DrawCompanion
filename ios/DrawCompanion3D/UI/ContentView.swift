@@ -20,6 +20,10 @@ struct ContentView: View {
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
 
+            if !model.isRecording && model.phase != .making {
+                GestureOverlay()
+            }
+
             if model.isRecording {
                 RecordingBar()
             } else {
