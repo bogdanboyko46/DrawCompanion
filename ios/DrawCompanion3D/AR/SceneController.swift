@@ -17,6 +17,8 @@ final class SceneController: NSObject, ARSessionDelegate {
     /// Called ~30×/s with where each speaking character's head is on screen.
     var onHeadPositions: (([String: BubbleSpot]) -> Void)?
     var onSpeak: ((CharacterActor, String) -> Void)?
+    /// Characters who meet talk to each other (Character/Encounters.swift).
+    let encounters = Encounters()
 
     override init() {
         arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
@@ -194,6 +196,7 @@ final class SceneController: NSObject, ARSessionDelegate {
     }
 
     func removeAll() {
+        encounters.cancel()
         for a in actors { a.anchor.removeFromParent() }
         actors.removeAll()
     }
@@ -223,7 +226,8 @@ final class SceneController: NSObject, ARSessionDelegate {
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         let point = gesture.location(in: arView)
         if let hit = arView.entity(at: point), let character = actors.first(where: { owns($0, hit) }) {
-            character.react()
+            // With someone nearby, a tap can start a conversation instead.
+            if !encounters.tapped(character, among: actors) { character.react() }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             return
         }
@@ -248,22 +252,18 @@ final class SceneController: NSObject, ARSessionDelegate {
         let camera = arView.cameraTransform.translation
         portal?.update(deltaTime: dt, cameraPosition: camera)
         for character in actors { character.update(deltaTime: dt, cameraPosition: camera) }
+        encounters.update(deltaTime: dt, actors: actors, cameraRight: arView.cameraTransform.rotation.act([1, 0, 0]))
 
         lastOverlay += dt
         if lastOverlay > 1.0 / 30, let onHeadPositions {
             lastOverlay = 0
-            var heads: [String: BubbleSpot] = [:]
             let right = arView.cameraTransform.rotation.act([1, 0, 0])
-            for character in actors {
+            let faces = actors.map { character in
                 let sides = character.faceSidePoints(cameraRight: right)
-                // Beside the face on the right, or on the left if there's no room.
-                if let r = arView.project(sides.right), r.x + 220 < arView.bounds.width {
-                    heads[character.job.id] = BubbleSpot(point: r, onRight: true)
-                } else if let l = arView.project(sides.left) {
-                    heads[character.job.id] = BubbleSpot(point: l, onRight: false)
-                }
+                return (id: character.job.id, left: arView.project(sides.left), right: arView.project(sides.right))
             }
-            onHeadPositions(heads)
+            // Beside the face, on the side away from any neighbor (Encounters.swift).
+            onHeadPositions(BubbleLayout.spots(faces, screenWidth: arView.bounds.width))
         }
     }
 

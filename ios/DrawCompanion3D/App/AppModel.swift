@@ -73,6 +73,7 @@ final class AppModel {
             self.heads = heads
         }
         scene.onSpeak = { [weak self] character, text in self?.say(text, by: character) }
+        scene.encounters.onThinking = { [weak self] character, on in self?.think(on, by: character) }
         refreshLibrary()
     }
 
@@ -268,6 +269,18 @@ final class AppModel {
             try? await Task.sleep(for: .seconds(3.2))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { _ = self?.speech.removeValue(forKey: id) }
+        }
+    }
+
+    /// A "…" bubble while a conversation is being written: shown until turned
+    /// off or replaced by a real line, and never spoken aloud.
+    private func think(_ on: Bool, by character: CharacterActor) {
+        let id = character.job.id
+        if on {
+            speechTimers[id]?.cancel()
+            speech[id] = SpeechLine(characterID: id, name: character.name, text: "…")
+        } else if speech[id]?.text == "…" {
+            withAnimation(.easeOut(duration: 0.2)) { _ = speech.removeValue(forKey: id) }
         }
     }
 

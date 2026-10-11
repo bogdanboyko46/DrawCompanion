@@ -196,6 +196,7 @@ final class CharacterActor {
             if time >= performUntil { enterIdle() }
 
         case .idle:
+            if isHeld { break } // in a scene: whoever holds it does the directing
             // Keep half an eye on you.
             if camDistance < 1.6 { desiredYaw = atan2(toCam.x, toCam.y) }
             let approached = camDistance < 0.45 * Float(root.scale.x) + 0.15
@@ -226,7 +227,7 @@ final class CharacterActor {
         yaw = approachAngle(yaw, desiredYaw, maxStep: turnRate * Float(dt))
         yawNode.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
 
-        if !animated { proceduralMotion() }
+        if !animated || isGesturing { proceduralMotion() }
     }
 
     /// World position just above the head, for the speech bubble.
@@ -287,6 +288,7 @@ final class CharacterActor {
     private func enterIdle() {
         state = .idle
         _ = play("idle")
+        if animated { body.transform = .identity } // undo a hop/shy gesture
         if nextDecision < time + 1.5 { nextDecision = time + 1.5 }
     }
 
@@ -298,6 +300,39 @@ final class CharacterActor {
         animator.playAnimation(entry.resource, transitionDuration: transition, startsPaused: false)
         playing = role
         return entry.clip.duration
+    }
+
+    // MARK: Encounter hooks (Character/Encounters.swift)
+
+    /// While true the brain doesn't wander, look around or greet on its own,
+    /// so a scene can direct it. Taps and walk(toWorld:) still work.
+    var isHeld = false
+
+    var isSettled: Bool { if case .idle = state { return true } else { return false } }
+    var isWalking: Bool { if case .walking = state { return true } else { return false } }
+    var isAppearing: Bool { if case .appearing = state { return true } else { return false } }
+
+    /// Height as it stands now, after pinching.
+    var scaledHeight: Float { height * root.scale.x }
+
+    /// Where its feet are, in world space.
+    var worldPosition: SIMD3<Float> { anchor.convert(position: root.position, to: nil) }
+
+    /// Turns (at its own pace) to face a world point.
+    func face(world point: SIMD3<Float>) {
+        let p = anchor.convert(position: point, from: nil)
+        let d = SIMD2<Float>(p.x - root.position.x, p.z - root.position.z)
+        if simd_length(d) > 0.001 { desiredYaw = atan2(d.x, d.y) }
+    }
+
+    /// Plays a gesture: "greet", "happy", "dance", or the procedural "hop" and
+    /// "shy", which also work on rigged characters (they move the whole body).
+    func express(_ role: String) { perform(role) }
+
+    /// Gestures done by moving the body, for rigged characters too.
+    private var isGesturing: Bool {
+        if case .performing(let role) = state, clips[role] == nil { return role == "hop" || role == "shy" }
+        return false
     }
 
     // MARK: Procedural life for static models
@@ -318,7 +353,18 @@ final class CharacterActor {
             tilt = simd_quatf(angle: 0.08 * sin(phase), axis: [0, 0, 1])
         case .performing(let role):
             let p = Float(min(1, (time - performStart) / 1.1))
-            if role == "greet" {
+            if role == "hop" {
+                // A quick little startle hop, no spin.
+                let q = min(1, p * 1.6)
+                position.y = sin(q * .pi) * height * 0.14
+                let squash = 1 - 0.1 * sin(q * .pi * 2) * (1 - q)
+                scale = [1, squash, 1]
+            } else if role == "shy" {
+                // Shrinks a little and sways, then straightens up.
+                let e = sin(p * .pi)
+                scale = [1 + 0.02 * e, 1 - 0.08 * e, 1 + 0.02 * e]
+                tilt = simd_quatf(angle: 0.12 * e * sin(p * .pi * 3), axis: [0, 0, 1])
+            } else if role == "greet" {
                 tilt = simd_quatf(angle: 0.22 * sin(p * .pi * 6) * (1 - p), axis: [0, 0, 1])
             } else {
                 position.y = sin(p * .pi) * height * 0.45
