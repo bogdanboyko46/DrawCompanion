@@ -160,6 +160,9 @@ enum PageScanner {
     /// Finds the single main figure and drops everything else: paper edges and
     /// shadows, specks, writing, and other doodles. Strokes that are close
     /// together (a stick arm next to a body) count as one figure.
+    /// Prints the figure finder's internals (for tuning on real captures).
+    nonisolated(unsafe) static var debug = false
+
     static func isolate(_ image: CGImage) -> Isolated? {
         let source = flattened(CIImage(cgImage: image))
         let e = source.extent
@@ -167,9 +170,13 @@ enum PageScanner {
 
         // Work on a coarse grid to find connected shapes. Bitmap row 0 is the top.
         let gw = 160, gh = max(8, Int((CGFloat(gw) * e.height / e.width).rounded()))
+        // Paper grain is scattered specks; strokes are continuous. A slight blur
+        // fades the specks and barely touches a line, so the shrink below (which
+        // keeps the strongest value in each cell) isn't filled with grain.
+        let despeckled = drawn.clampedToExtent().applyingGaussianBlur(sigma: Double(max(1.5, e.width / 700)))
         // Spread each line over its grid cell first, so thin pencil survives the shrink.
         let pool = CIFilter.morphologyMaximum()
-        pool.inputImage = drawn.clampedToExtent()
+        pool.inputImage = despeckled
         pool.radius = Float(e.width / CGFloat(gw) / 2 + 1)
         let pooled = (pool.outputImage ?? drawn).cropped(to: e)
         let small = pooled.transformed(by: CGAffineTransform(scaleX: CGFloat(gw) / e.width, y: CGFloat(gh) / e.height))
@@ -187,7 +194,15 @@ enum PageScanner {
         }
         levels.sort()
         let strong = levels.isEmpty ? 255 : Int(levels[min(levels.count - 1, levels.count * 99 / 100)])
-        let threshold = UInt8(max(90, min(210, strong * 55 / 100)))
+        // Line work covers at most ~8% of the frame. On grainy paper the grain
+        // reaches the usual cutoff too, so raise it until only the strongest 8%
+        // of cells remain (the strokes themselves are at full strength).
+        let cells = (gw - 2 * border) * (gh - 2 * border)
+        let base = max(90, strong * 55 / 100)
+        let aboveBase = levels.count - (levels.firstIndex { Int($0) > base } ?? levels.count)
+        let grainy = aboveBase > cells * 12 / 100
+        let topEight = grainy && levels.count > cells * 8 / 100 ? Int(levels[levels.count - cells * 8 / 100]) : 0
+        let threshold = UInt8(min(235, max(base, topEight)))
         var ink = [Bool](repeating: false, count: gw * gh)
         for y in border..<(gh - border) {
             for x in border..<(gw - border) where px[(y * gw + x) * 4] > threshold { ink[y * gw + x] = true }
@@ -235,6 +250,10 @@ enum PageScanner {
                 if score > best.score { best = (score, count) }
             }
             count += 1
+        }
+        if debug {
+            let inkCells = ink.filter { $0 }.count
+            print("[isolate] strong=\(strong) threshold=\(threshold) ink=\(inkCells * 100 / (gw * gh))% shapes=\(count) best=\(best.id) score=\(Int(best.score))")
         }
         guard best.id >= 0 else { return nil }
 

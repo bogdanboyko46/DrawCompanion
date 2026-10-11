@@ -40,6 +40,10 @@ final class PaperPortal {
         let source = page.cutout ?? page.image
         cardHeight = max(0.08, page.size.y)
         card = PaperPortal.makeCard(image: source, width: page.size.x, height: page.size.y)
+        // The drawing itself isn't shown lifting off the paper (a photo cutout of
+        // pencil on paper never looks clean). The card is an invisible carrier
+        // for the painted concept, which appears on it once it's ready.
+        card.model?.materials = [PaperPortal.cardMaterial(texture: nil, alpha: 0)]
 
         // Halo: a soft rounded glow lying on the paper.
         glow = ModelEntity(
@@ -157,9 +161,6 @@ final class PaperPortal {
         if conceptFade >= 0, conceptFade < 1, let concept {
             conceptFade = min(1, conceptFade + Float(dt) / 1.6)
             concept.components.set(OpacityComponent(opacity: smoothstep(conceptFade)))
-            card.model?.materials = card.model?.materials.map { _ in
-                PaperPortal.cardMaterial(texture: cardTexture, alpha: 1 - 0.85 * smoothstep(conceptFade))
-            } ?? []
         }
         if turntable.count > 1, !dissolved, conceptFade >= 1, time - lastTurn > 1.1 {
             lastTurn = time
@@ -181,10 +182,6 @@ final class PaperPortal {
     }
 
     // MARK: Building blocks
-
-    private lazy var cardTexture: TextureResource? = {
-        try? TextureResource.generate(from: page.cutout ?? page.image, options: .init(semantic: .color))
-    }()
 
     /// Where the card sits when it's still "part of the paper": flat, over the figure.
     private func flatTransform() -> Transform {
