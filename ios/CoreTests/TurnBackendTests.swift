@@ -42,6 +42,8 @@ final class TurnBackendTests: XCTestCase {
         StubProtocol.streamReplies = [(200, ClaudeClientTests.sse(drawing))]
         let events = try await run("I want to make dinner later")
         XCTAssertEqual(events, [.action(.ignore), .done])
+        // Let the cancelled request settle so it can't reach the next test's stub.
+        try await Task.sleep(nanoseconds: 300_000_000)
     }
 
     func testChatterNeverStartsADrawingCall() async throws {
@@ -55,7 +57,8 @@ final class TurnBackendTests: XCTestCase {
         let current = Outline(strokes: [Stroke(role: .contour, weight: .medium, d: "M 1 1 L 9 9", closed: false, points: [])],
                               history: ["add an arm"])
         StubProtocol.replies = [(200, filterReply("new"))]
-        StubProtocol.streamReplies = [(200, ClaudeClientTests.sse(drawing)), (200, ClaudeClientTests.sse(drawing))]
+        // A spare reply: the cancelled speculative call may or may not reach the stub.
+        StubProtocol.streamReplies = Array(repeating: (200, ClaudeClientTests.sse(drawing)), count: 3)
         let events = try await run("make it bigger", current: current) // guessed revise; the filter says new
         XCTAssertEqual(events.first, .action(.new))
         XCTAssertEqual(events.filter { if case .stroke = $0 { return true } else { return false } }.count, 2)
