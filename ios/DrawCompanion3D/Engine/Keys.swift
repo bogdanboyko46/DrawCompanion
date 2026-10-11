@@ -10,6 +10,8 @@ import Security
 enum Keys {
     static let anthropic = "anthropic-api-key"
     static let meshy = "meshy-api-key"
+    /// Optional: ElevenLabs voices for the characters (otherwise iOS's own).
+    static let elevenLabs = "elevenlabs-api-key"
     private static let service = "DrawCompanion"
 
     static func value(_ account: String) -> String? {
@@ -51,5 +53,6 @@ enum Keys {
         else { return }
         if let a = dict["ANTHROPIC_API_KEY"], !a.isEmpty, value(anthropic) != a { set(a, for: anthropic) }
         if let m = dict["MESHY_API_KEY"], !m.isEmpty, value(meshy) != m { set(m, for: meshy) }
+        if let e = dict["ELEVENLABS_API_KEY"], !e.isEmpty, value(elevenLabs) != e { set(e, for: elevenLabs) }
     }
 }

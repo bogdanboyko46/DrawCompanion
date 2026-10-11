@@ -1,11 +1,13 @@
 import AVFoundation
 
-/// Gives every character a voice of its own, spoken aloud next to its bubble.
+/// Gives every character a voice of its own, spoken aloud next to its bubble:
+/// a real human voice from ElevenLabs when there's a key, iOS's own otherwise
+/// (or if the network lets us down).
 ///
-/// One shared synthesizer, so characters take turns instead of talking over
-/// each other; a character's new line cuts off its own previous one.
+/// Characters take turns instead of talking over each other; a character's
+/// new line cuts off its own previous one.
 @MainActor
-final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
+final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     static let shared = CharacterVoice()
 
     private let synthesizer = AVSpeechSynthesizer()
@@ -14,26 +16,113 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
     private var profiles: [String: VoiceProfile] = [:]
     private var lastSound = Date.distantPast
 
-    /// A character is talking, or just stopped (the room still rings a moment):
-    /// the mic shouldn't take that for you.
-    var isSpeaking: Bool { synthesizer.isSpeaking }
-    var isBusy: Bool { synthesizer.isSpeaking || !speakers.isEmpty || Date().timeIntervalSince(lastSound) < 0.6 }
+    // ElevenLabs playback: lines queue up and play one after another.
+    private var player: AVAudioPlayer?
+    private var playerSpeaker: String?
+    private var playerDone: CheckedContinuation<Void, Never>?
+    private var queueTail: Task<Void, Never>?
+    private var pending = 0
+    /// Bumped by stop(): queued lines are dropped.
+    private var generation = 0
+
+    /// A character is talking (or about to: its line is on the way).
+    var isSpeaking: Bool { synthesizer.isSpeaking || (player?.isPlaying ?? false) || pending > 0 }
+    /// Talking, or just stopped (the room still rings a moment): the mic
+    /// shouldn't take that for you.
+    var isBusy: Bool { isSpeaking || !speakers.isEmpty || Date().timeIntervalSince(lastSound) < 0.6 }
 
     override private init() {
         super.init()
         synthesizer.delegate = self
+        CloudVoices.shared.warmUp()
     }
 
     func speak(_ text: String, by character: CharacterActor) {
         let id = character.job.id
         // Reactions like "♪" have nothing to say out loud.
         guard text.contains(where: \.isLetter) else { return }
-        if let current, speakers[current] == id {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
         let profile = profiles[id] ?? VoiceProfile(for: character.job)
         profiles[id] = profile
 
+        guard CloudVoices.shared.key != nil else { return speakLocally(text, id: id, profile: profile) }
+        if playerSpeaker == id { finishPlaying() } // its own previous line
+        if let current, speakers[current] == id { synthesizer.stopSpeaking(at: .immediate) }
+
+        let myGeneration = generation
+        pending += 1
+        // Fetch now (in parallel with whatever's playing), play in turn.
+        let audio = Task { () -> Data? in
+            do {
+                let voice = try await CloudVoices.shared.voice(for: profile, seed: id)
+                return try await CloudVoices.shared.audio(text, voice: voice, speed: Double(profile.speed))
+            } catch {
+                print("[voice] ElevenLabs failed, using iOS voice: \(error.localizedDescription)")
+                return nil
+            }
+        }
+        let previous = queueTail
+        queueTail = Task { [weak self] in
+            await previous?.value
+            let data = await audio.value
+            guard let self else { return }
+            defer { self.pending -= 1; self.lastSound = Date() }
+            guard self.generation == myGeneration else { return }
+            guard let data else { return self.speakLocally(text, id: id, profile: profile) }
+            await self.play(data, by: id)
+        }
+    }
+
+    /// Hush, e.g. "shhh".
+    func stop() {
+        generation += 1
+        finishPlaying()
+        synthesizer.stopSpeaking(at: .immediate)
+        speakers.removeAll()
+        current = nil
+        lastSound = Date()
+    }
+
+    // MARK: ElevenLabs playback
+
+    private func play(_ data: Data, by id: String) async {
+        do {
+            let player = try AVAudioPlayer(data: data)
+            player.delegate = self
+            AudioRoute.prepareToSpeak()
+            self.player = player
+            playerSpeaker = id
+            await withCheckedContinuation { c in
+                playerDone = c
+                if !player.play() { finishPlaying() }
+            }
+        } catch {
+            print("[voice] couldn't play: \(error.localizedDescription)")
+        }
+    }
+
+    private func finishPlaying() {
+        player?.stop()
+        player = nil
+        playerSpeaker = nil
+        lastSound = Date()
+        playerDone?.resume()
+        playerDone = nil
+        if pending <= 1, speakers.isEmpty { AudioRoute.rest() }
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let finished = ObjectIdentifier(player)
+        Task { @MainActor in
+            if let current = self.player, ObjectIdentifier(current) == finished { self.finishPlaying() }
+        }
+    }
+
+    // MARK: iOS voices
+
+    private func speakLocally(_ text: String, id: String, profile: VoiceProfile) {
+        if let current, speakers[current] == id {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = profile.voice
         utterance.pitchMultiplier = profile.pitch
@@ -44,25 +133,15 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
         synthesizer.speak(utterance)
     }
 
-    /// Hush, e.g. when the user starts talking (and so the mic doesn't hear it).
-    func stop() {
-        synthesizer.stopSpeaking(at: .immediate)
-        speakers.removeAll()
-        current = nil
-        lastSound = Date()
-    }
-
     private func finished(_ id: ObjectIdentifier) {
         speakers[id] = nil
         if current == id { current = nil }
         lastSound = Date()
-        if speakers.isEmpty { AudioRoute.rest() }
+        if speakers.isEmpty, pending == 0 { AudioRoute.rest() }
     }
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         let id = ObjectIdentifier(utterance)
-        let route = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType.rawValue)
-        print("[voice] speaking via \(route) category \(AVAudioSession.sharedInstance().category.rawValue)")
         Task { @MainActor in self.current = id }
     }
 
@@ -72,7 +151,6 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        print("[voice] cancelled")
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in self.finished(id) }
     }
@@ -85,6 +163,11 @@ struct VoiceProfile {
     var voice: AVSpeechSynthesisVoice?
     var pitch: Float
     var rate: Float
+    /// Little and sweet, or big and gruff (picks the ElevenLabs voice).
+    var cute: Bool
+    var gruff: Bool
+    /// ElevenLabs speaking speed (1 = normal).
+    var speed: Float
 
     init(for job: CharacterJob) {
         let info = job.character
@@ -100,11 +183,14 @@ struct VoiceProfile {
         if cute { pitch += 0.07 }
         if gruff { pitch -= 0.06 }
         self.pitch = pitch
+        self.cute = cute
+        self.gruff = gruff
 
         let energy = Float(personality.energy)
         var rate = AVSpeechUtteranceDefaultSpeechRate * (0.96 + 0.12 * energy)
         if has(["sleepy", "lazy", "calm", "wise", "old"]) { rate *= 0.95 }
         self.rate = rate
+        speed = (0.95 + 0.12 * energy) * (has(["sleepy", "lazy", "calm", "wise", "old"]) ? 0.95 : 1)
 
         voice = Self.pickVoice(deep: gruff, high: !gruff, seed: job.id)
         if let voice { print("[voice] \(voice.name) quality \(voice.quality.rawValue) pitch \(pitch)") }
