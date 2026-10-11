@@ -26,7 +26,7 @@ final class PaperPortal {
     private var conceptFade: Float = -1
     private var dissolving: (start: TimeInterval, done: () -> Void)?
     private var dissolved = false
-    private var turntable: [CGImage] = []
+    private var turntable: [ModelEntity] = []
     private var turntableIndex = 0
     private var lastTurn: TimeInterval = 0
     private let cardHeight: Float
@@ -112,7 +112,16 @@ final class PaperPortal {
     /// side, back) on the card so the character seems to turn in place.
     func startTurntable(_ frames: [CGImage]) {
         guard frames.count > 1 else { return }
-        turntable = frames
+        // Build each view's card once and just switch which one is visible.
+        turntable.forEach { $0.removeFromParent() }
+        turntable = frames.map { cg in
+            let aspect = Float(cg.width) / Float(max(1, cg.height))
+            let e = PaperPortal.makeCard(image: cg, width: cardHeight * aspect, height: cardHeight)
+            e.position.z = 0.002
+            e.isEnabled = false
+            card.addChild(e)
+            return e
+        }
         turntableIndex = 0
         lastTurn = time
     }
@@ -165,12 +174,9 @@ final class PaperPortal {
         if turntable.count > 1, !dissolved, conceptFade >= 1, time - lastTurn > 1.1 {
             lastTurn = time
             turntableIndex = (turntableIndex + 1) % turntable.count
-            let cg = turntable[turntableIndex]
-            let aspect = Float(cg.width) / Float(max(1, cg.height))
-            let next = PaperPortal.makeCard(image: cg, width: cardHeight * aspect, height: cardHeight)
-            next.position.z = 0.002
-            concept?.removeFromParent()
-            card.addChild(next)
+            concept?.isEnabled = false
+            let next = turntable[turntableIndex]
+            next.isEnabled = true
             concept = next
         }
         if let d = dissolving, time - d.start > 0.35 {
