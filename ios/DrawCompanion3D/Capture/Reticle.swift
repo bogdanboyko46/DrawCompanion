@@ -8,6 +8,12 @@ enum Reticle {
     /// Portrait 3:4, since standing figures are taller than wide (and their feet
     /// shouldn't end up at the very edge).
     static func rect(in size: CGSize) -> CGRect {
+        if size.width > size.height {
+            // Landscape: on the left, clear of the panels on the right.
+            let height = size.height * 0.72
+            let width = height * 3 / 4
+            return CGRect(x: size.width * 0.36 - width / 2, y: size.height * 0.53 - height / 2, width: width, height: height)
+        }
         let height = min(size.width * 0.82 * 4 / 3, size.height * 0.56)
         let width = height * 3 / 4
         // Slightly above center, clear of the controls at the bottom.

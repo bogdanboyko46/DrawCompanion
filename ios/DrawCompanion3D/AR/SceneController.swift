@@ -107,6 +107,20 @@ final class SceneController: NSObject, ARSessionDelegate {
 
         // Where is the frame on the table?
         var world = viewCorners.compactMap { raycast($0) }
+        if world.count < 4 {
+            // Only part of the frame hit a known surface: if the table is found
+            // anywhere in the frame, extend it as a flat plane and intersect each
+            // corner's camera ray with it.
+            let r = Reticle.rect(in: viewport)
+            let probes = [CGPoint(x: r.midX, y: r.midY)] + world.indices.map { viewCorners[$0] } + viewCorners
+            if let level = probes.lazy.compactMap({ self.raycast($0) }).first?.y {
+                world = viewCorners.compactMap { point in
+                    guard let ray = arView.ray(through: point), ray.direction.y < -0.05 else { return nil }
+                    let t = (level - ray.origin.y) / ray.direction.y
+                    return t > 0 ? ray.origin + ray.direction * t : nil
+                }
+            }
+        }
         let measured = world.count == 4
         if !measured {
             // No surface found yet: a 20 cm square in front of the camera.

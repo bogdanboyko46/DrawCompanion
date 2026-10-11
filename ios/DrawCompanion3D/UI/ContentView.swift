@@ -45,6 +45,19 @@ struct ContentView: View {
         VStack(spacing: 12) {
             TopBar()
             Spacer()
+            // Landscape: the panels sit in a column on the right, leaving the
+            // capture frame and the characters on the left in view.
+            HStack(alignment: .bottom) {
+                Spacer(minLength: 0)
+                panels.frame(maxWidth: 380)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private var panels: some View {
+        VStack(spacing: 12) {
             if model.phase == .alive {
                 TalkButton()
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -70,8 +83,6 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
 }
 
