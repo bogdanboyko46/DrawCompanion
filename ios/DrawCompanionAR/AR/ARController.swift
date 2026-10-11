@@ -41,6 +41,8 @@ final class ARController: NSObject, ARSessionDelegate {
     /// Why the page wasn't found, counted and logged every few seconds while
     /// it's missing (so "Looking for paper" can be diagnosed from the log).
     private var misses: [String: Int] = [:]
+    /// The latest reason the page wasn't found, with when (for the status hint).
+    private(set) var lastMiss: (reason: String, at: TimeInterval)?
     private var lastMissLog: TimeInterval = 0
     private var detecting = false
     private var lastDetectStart: TimeInterval = 0
@@ -53,6 +55,7 @@ final class ARController: NSObject, ARSessionDelegate {
     private static let agree: Float = 0.012 // m: candidates this close count as the same new placement
     private static let votesToMove = 3 // ≈1.2 s of agreeing detections
     private static let votesToStart = 2
+    private static let agreeToStart: Float = 0.03
 
     func start() {
         let config = ARWorldTrackingConfiguration()
@@ -86,6 +89,7 @@ final class ARController: NSObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         if case .normal = frame.camera.trackingState { trackingNormal = true } else { trackingNormal = false }
+        glide(frame.timestamp)
         watchForWave(frame)
         guard !detecting, frame.timestamp - lastDetectStart >= detectInterval else { return }
         detecting = true
@@ -108,31 +112,68 @@ final class ARController: NSObject, ARSessionDelegate {
 
     /// Page corners in normalized image coordinates (origin top-left),
     /// ordered top-left, top-right, bottom-right, bottom-left.
-    enum Miss: String, Error { case noPage = "no page seen", lowConfidence = "page unsure", cutOff = "page cut off by the view edge", odd = "odd corners" }
+    enum Miss: String, Error { case noPage = "no page seen", lowConfidence = "page unsure", cutOff = "page cut off by the view edge", odd = "odd corners", notPaper = "shape isn't all paper" }
 
     static func detectPage(in pixelBuffer: CVPixelBuffer) -> Result<[CGPoint], Miss> {
         let request = VNDetectDocumentSegmentationRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
         guard (try? handler.perform([request])) != nil, let obs = request.results?.first else { return .failure(.noPage) }
-        // Two detections must still agree before the page is pinned, so a
-        // less sure one is fine (hands on the paper lower the confidence).
-        guard obs.confidence > 0.5 else { return .failure(.lowConfidence) }
         // Vision's origin is bottom-left; flip to top-left.
         let pts = [obs.topLeft, obs.topRight, obs.bottomRight, obs.bottomLeft].map { CGPoint(x: $0.x, y: 1 - $0.y) }
         // A corner on the image border means the page is cut off: its "corner" is
         // really the edge of the view, and the page would come out the wrong shape.
+        // Checked first: a cut-off page also gets a low confidence, and "move
+        // back" is the useful hint then. (A whole-frame guess is "no page".)
         let margin = 0.015
-        guard pts.allSatisfy({ $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }) else { return .failure(.cutOff) }
+        let onBorder = pts.filter { !($0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin) }.count
+        if onBorder == 4 { return .failure(.noPage) }
+        if onBorder > 0 { return .failure(.cutOff) }
+        // Two detections must still agree before the page is pinned, so a
+        // less sure one is fine (hands on the paper lower the confidence).
+        guard obs.confidence > 0.5 else { return .failure(.lowConfidence) }
         let tl = pts.min { $0.x + $0.y < $1.x + $1.y }!
         let br = pts.max { $0.x + $0.y < $1.x + $1.y }!
         let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
         let bl = pts.min { $0.x - $0.y < $1.x - $1.y }!
         let ordered = [tl, tr, br, bl]
-        return Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 ? .success(ordered) : .failure(.odd)
+        guard Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 else { return .failure(.odd) }
+        // Vision sometimes outlines a strip of paper plus the desk below it;
+        // pinning that put the AI's photo mostly on the desk. Paper is evenly bright.
+        guard Self.mostlyPaper(pixelBuffer, quad: ordered) else { return .failure(.notPaper) }
+        return .success(ordered)
+    }
+
+    /// True when nearly all of the quad's inside is as bright as paper (luma,
+    /// sampled on a grid, compared with the brightest part of the inside).
+    static func mostlyPaper(_ pixelBuffer: CVPixelBuffer, quad q: [CGPoint]) -> Bool {
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 1 else { return true }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return true }
+        let w = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0), h = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let row = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let luma = base.assumingMemoryBound(to: UInt8.self)
+        var values: [Int] = []
+        for i in 0..<12 {
+            for j in 0..<12 {
+                // Bilinear position inside the quad, kept 8% away from its edges.
+                let u = 0.08 + 0.84 * (Double(i) + 0.5) / 12, v = 0.08 + 0.84 * (Double(j) + 0.5) / 12
+                let top = CGPoint(x: q[0].x + (q[1].x - q[0].x) * u, y: q[0].y + (q[1].y - q[0].y) * u)
+                let bottom = CGPoint(x: q[3].x + (q[2].x - q[3].x) * u, y: q[3].y + (q[2].y - q[3].y) * u)
+                let x = Int((top.x + (bottom.x - top.x) * v) * CGFloat(w)), y = Int((top.y + (bottom.y - top.y) * v) * CGFloat(h))
+                guard x >= 0, y >= 0, x < w, y < h else { continue }
+                values.append(Int(luma[y * row + x]))
+            }
+        }
+        guard values.count > 50 else { return false }
+        let bright = values.sorted()[values.count * 9 / 10]
+        let paperLike = values.filter { Double($0) >= Double(bright) * 0.55 }.count
+        return Double(paperLike) / Double(values.count) >= 0.85
     }
 
     private func miss(_ why: String, _ frame: ARFrame) {
         guard corners == nil else { return }
+        lastMiss = (why, frame.timestamp)
         misses[why, default: 0] += 1
         if frame.timestamp - lastMissLog > 3 {
             lastMissLog = frame.timestamp
@@ -193,7 +234,13 @@ final class ARController: NSObject, ARSessionDelegate {
     }
 
     private func place(_ imageCorners: [CGPoint], using frame: ARFrame) {
-        let hits = imageCorners.compactMap { raycast($0, frame) }
+        var hits = imageCorners.compactMap { raycast($0, frame) }
+        if hits.count < 4 {
+            // The desk isn't mapped yet (dark, glossy or plain desks): use the
+            // depth sensor's height of the paper, measured across the sheet,
+            // and put each corner where its line of sight meets that level desk.
+            hits = Self.cornersOnDepthPlane(imageCorners, frame) ?? []
+        }
         guard hits.count == 4 else { return miss("desk surface not found under the corners", frame) }
         guard var next = Self.fitRectangle(hits) else { return miss("not paper-sized", frame) }
         if let old = corners {
@@ -205,7 +252,15 @@ final class ARController: NSObject, ARSessionDelegate {
 
         guard let current = corners else {
             // First sighting: wait for a second detection to agree before showing anything.
-            if let agreed = vote(next, needed: Self.votesToStart) { pin(agreed) }
+            // Handheld, corners wobble by a couple of centimeters between
+            // detections; the drawing aligner fine-tunes the lock afterwards.
+            let disagreement = candidate.map { Self.spread(next, $0) }
+            if let agreed = vote(next, needed: Self.votesToStart, within: Self.agreeToStart) {
+                pin(agreed)
+                print("[DC] page: found")
+            } else if let d = disagreement {
+                miss(d < 0.1 ? String(format: "detections %.0f cm apart", d * 100) : "detections far apart", frame)
+            }
             return
         }
         if Self.spread(next, current) < Self.noise {
@@ -219,8 +274,8 @@ final class ARController: NSObject, ARSessionDelegate {
     }
 
     /// Counts agreeing detections; returns their average once there are enough.
-    private func vote(_ next: [SIMD3<Float>], needed: Int) -> [SIMD3<Float>]? {
-        if let c = candidate, Self.spread(next, c) < Self.agree {
+    private func vote(_ next: [SIMD3<Float>], needed: Int, within: Float = ARController.agree) -> [SIMD3<Float>]? {
+        if let c = candidate, Self.spread(next, c) < within {
             candidate = zip(c, next).map { $0 + ($1 - $0) * 0.5 }
             candidateVotes += 1
         } else {
@@ -232,13 +287,37 @@ final class ARController: NSObject, ARSessionDelegate {
 
     /// Moves the page to where the drawing was actually seen (from the drawing
     /// aligner). ARKit then carries this corrected position smoothly.
+    /// The outline glides there over ~0.1 s instead of jumping (corrections
+    /// several times a second made it twitch).
     func repin(_ next: [SIMD3<Float>]) {
         guard next.count == 4 else { return }
-        corners = next
+        if corners == nil { corners = next }
+        glideTarget = next
         version += 1
     }
 
+    /// Where `corners` is gliding to, after a correction.
+    private var glideTarget: [SIMD3<Float>]?
+    private var lastGlide: TimeInterval = 0
+
+    private func glide(_ t: TimeInterval) {
+        defer { lastGlide = t }
+        guard let target = glideTarget, let current = corners else { return }
+        let k = Float(1 - exp(-max(0, min(0.1, t - lastGlide)) / 0.06))
+        let next = zip(current, target).map { $0 + ($1 - $0) * k }
+        if Self.spread(next, target) < 0.0002 { corners = target; glideTarget = nil } else { corners = next }
+    }
+
+    /// World position of a page point on the given corners (bilinear).
+    static func world(_ p: PaperPoint, corners c: [SIMD3<Float>], paper: PaperSize) -> SIMD3<Float> {
+        let u = Float(p.x / paper.w), v = Float(p.y / paper.h)
+        let top = c[0] + (c[1] - c[0]) * u
+        let bottom = c[3] + (c[2] - c[3]) * u
+        return top + (bottom - top) * v
+    }
+
     private func pin(_ next: [SIMD3<Float>]) {
+        glideTarget = nil
         corners = next
         version += 1
         candidate = nil
@@ -259,16 +338,47 @@ final class ARController: NSObject, ARSessionDelegate {
                 return SIMD3(t.x, t.y, t.z)
             }
         }
-        guard let p = Self.depthPoint(point, frame) else { return nil }
-        if !loggedDepthCheck, let back = Self.project(p, camera: frame.camera) {
-            // One-time sanity check: the depth point must land back where it came from.
-            loggedDepthCheck = true
-            let res = frame.camera.imageResolution
-            print(String(format: "[DC] page: using LiDAR depth; check %.1f px off", hypot(back.x - point.x * res.width, back.y - point.y * res.height)))
-        }
-        return p
+        return nil
     }
-    private var loggedDepthCheck = false
+
+    /// The four corners on a level plane at the paper's height. The height is
+    /// the median world height of LiDAR points across the middle of the sheet
+    /// (corner pixels themselves mix paper and desk, and were off by cm).
+    static func cornersOnDepthPlane(_ q: [CGPoint], _ frame: ARFrame) -> [SIMD3<Float>]? {
+        var heights: [Float] = []
+        for i in 0..<7 {
+            for j in 0..<7 {
+                let u = 0.2 + 0.6 * CGFloat(i) / 6, v = 0.2 + 0.6 * CGFloat(j) / 6
+                let top = CGPoint(x: q[0].x + (q[1].x - q[0].x) * u, y: q[0].y + (q[1].y - q[0].y) * u)
+                let bottom = CGPoint(x: q[3].x + (q[2].x - q[3].x) * u, y: q[3].y + (q[2].y - q[3].y) * u)
+                let p = CGPoint(x: top.x + (bottom.x - top.x) * v, y: top.y + (bottom.y - top.y) * v)
+                if let w = depthPoint(p, frame) { heights.append(w.y) }
+            }
+        }
+        guard heights.count >= 15 else { return nil }
+        let level = heights.sorted()[heights.count / 2]
+        let cam = frame.camera
+        let origin = SIMD3(cam.transform.columns.3.x, cam.transform.columns.3.y, cam.transform.columns.3.z)
+        let k = cam.intrinsics, res = cam.imageResolution
+        let corners: [SIMD3<Float>] = q.compactMap { p in
+            // Line of sight through this pixel, in world space.
+            let u = Float(p.x * res.width), v = Float(p.y * res.height)
+            let local = SIMD4<Float>((u - k[2][0]) / k[0][0], -(v - k[2][1]) / k[1][1], -1, 0)
+            let d4 = cam.transform * local
+            let dir = SIMD3(d4.x, d4.y, d4.z)
+            guard abs(dir.y) > 1e-4 else { return nil }
+            let t = (level - origin.y) / dir.y
+            guard t > 0.05, t < 3 else { return nil }
+            return origin + dir * t
+        }
+        if corners.count == 4, !loggedDepthPlane {
+            loggedDepthPlane = true
+            print(String(format: "[DC] page: on LiDAR plane at height %.3f m (%d samples, spread %.1f cm)", level, heights.count,
+                         ((heights.sorted()[heights.count * 9 / 10] - heights.sorted()[heights.count / 10]) * 100)))
+        }
+        return corners.count == 4 ? corners : nil
+    }
+    nonisolated(unsafe) private static var loggedDepthPlane = false
 
     /// World position of an image point (normalized, origin top-left) from the
     /// LiDAR depth map: the median depth around it, unprojected through the camera.

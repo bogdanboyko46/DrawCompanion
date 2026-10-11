@@ -15,6 +15,11 @@ enum AppSettings {
     static let defaultUpgradeServer = "http://100.70.57.3:8787"
 
     static var upgradeEnabled: Bool { !UserDefaults.standard.bool(forKey: upgradeOff) }
+    /// Where to look for the server: the address in Settings (or this Mac on
+    /// Wi-Fi), then the Mac's end of the USB cable's network link.
+    static var upgradeCandidates: [URL] {
+        [upgradeURL, URL(string: "http://169.254.118.224:8787")].compactMap { $0 }
+    }
     static var upgradeURL: URL? {
         let s = UserDefaults.standard.string(forKey: upgradeServer)?.trimmingCharacters(in: .whitespaces)
         return URL(string: (s?.isEmpty == false ? s! : defaultUpgradeServer))

@@ -75,7 +75,7 @@ struct PhoneOverlay: View {
 
     private var status: StatusPill.Status {
         if live.state == .paused { return .init(text: "Paused", color: .gray) }
-        if !model.pageFound { return .init(text: "Looking for paper", color: .orange) }
+        if !model.pageFound { return .init(text: model.pageHint, color: .orange) }
         if model.working { return .init(text: "Working on it", color: .brand, pulsing: true) }
         if model.refining { return .init(text: "Refining the drawing", color: .brand, pulsing: true) }
         if model.listening { return .init(text: "Listening", color: .green) }

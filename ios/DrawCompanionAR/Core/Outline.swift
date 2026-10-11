@@ -61,6 +61,9 @@ enum TurnAction: String, Codable {
 
 enum TurnEvent: Equatable {
     case action(TurnAction)
+    /// Where the drawing model decided the new piece goes (page units),
+    /// before its first stroke: lets slower work (the refinement) start early.
+    case place(PaperRect)
     case stroke(Stroke)
     case done
 }

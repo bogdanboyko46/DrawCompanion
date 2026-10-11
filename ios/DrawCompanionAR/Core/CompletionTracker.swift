@@ -28,6 +28,8 @@ final class CompletionTracker {
         var confirmFrames = 3 // consecutive frames a point must look inked
         var strokeDoneAt = 0.8 // fraction of a stroke traced to show it as done
         var sampleSpacing = 0.012 // distance between samples along a stroke, fraction of page width
+        var startFraction = 0.1 // share of the outline that must be traced before it counts as started
+        var minTracedPoints = 8 // ~10 paper units apart: a smudge touches ~5 through the hit radius
     }
 
     struct StrokeState: Equatable {
@@ -117,7 +119,6 @@ final class CompletionTracker {
                         if Int(tracks[t].streak[i]) >= opts.confirmFrames {
                             tracks[t].traced[i] = true
                             active = true
-                            started = true
                         }
                     }
                 }
@@ -127,6 +128,12 @@ final class CompletionTracker {
             tracks[t].progress = n == 0 ? 1 : Double(tracedCount) / Double(n)
             tracks[t].done = tracks[t].progress >= opts.strokeDoneAt
         }
+        // Tracing has started once a real share of the outline is inked: one
+        // stray point (a shadow, a few pixels of misalignment) used to count,
+        // and the outline then cleared itself 3 s later.
+        let total = tracks.reduce(0) { $0 + $1.samples.count }
+        let traced = tracks.reduce(0) { $0 + $1.traced.filter { $0 }.count }
+        if traced >= max(opts.minTracedPoints, Int(Double(total) * opts.startFraction)) { started = true }
         if active { lastActivity = now }
         done = started && now - lastActivity >= opts.idleSeconds
         return state(false, now)

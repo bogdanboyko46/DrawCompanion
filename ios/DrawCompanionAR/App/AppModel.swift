@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var listening = false
     @Published private(set) var working = false
     @Published private(set) var pageFound = false
+    /// What to do so the page can be found (shown while it isn't).
+    @Published private(set) var pageHint = "Looking for paper"
     @Published private(set) var hasOutline = false
     @Published private(set) var lastHeard = ""
     @Published private(set) var problem: String?
@@ -73,8 +75,12 @@ final class AppModel: ObservableObject {
     private var turnID = 0
     private var rollback: (() -> Void)?
     private var waitingForPage = false
+    private var lastPhraseAt: TimeInterval = 0
 
     private var upgradeTask: Task<Void, Never>?
+    /// The turn the running refinement belongs to, and the turn that drew the current outline.
+    private var upgradeTurn = -1
+    private var outlineTurn = -1
     /// The tracing baseline of the current outline, to restart tracking when
     /// its strokes are swapped for the upgraded ones.
     private var trackBaseline: (gray: [Float], height: Int, paper: PaperSize)?
@@ -113,6 +119,7 @@ final class AppModel: ObservableObject {
         alignTimer = Timer.scheduledTimer(withTimeInterval: 0.07, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.alignStep() }
         }
+        checkUpgradeServer()
     }
 
     func refreshKey() {
@@ -148,6 +155,11 @@ final class AppModel: ObservableObject {
             print("[DC] ignored while drawing: \(text)")
             return
         }
+        // Waiting for the page: what was said long ago is stale; don't send it
+        // later bundled with today's request ("draw a cat" said five times).
+        let now = CACurrentMediaTime()
+        if waitingForPage, now - lastPhraseAt > 15 { pending.removeAll() }
+        lastPhraseAt = now
         pending.append(text)
         sendTurn()
     }
@@ -243,6 +255,10 @@ final class AppModel: ObservableObject {
         case let .action(action):
             turnAction = action
             if action == .hide { clearOutline() }
+        case let .place(box):
+            // The refinement needs only the words, the page and where it goes:
+            // start it now instead of after Claude's whole outline (~3-5 s sooner).
+            if turnAction == .new { startUpgrade(page: page, paper: paper, said: utterances, box: box) }
         case let .stroke(stroke):
             if let f = stroke.points.first, let w = ar.world(f), let frame = ar.session.currentFrame {
                 print("[DC] stroke \(stroke.role.rawValue) pts=\(stroke.points.count) first=\(f) img=\(String(describing: ARController.project(w, camera: frame.camera))) imgSize=\(frame.camera.imageResolution)")
@@ -257,25 +273,53 @@ final class AppModel: ObservableObject {
             rollback = nil
             if turnDrawing {
                 startTracking(baseline: baseline, paper: paper)
-                if turnAction == .new { startUpgrade(page: page, paper: paper, said: utterances) }
+                if turnAction == .new, upgradeTurn != id, let box = outline.flatMap({ UpgradeClient.bounds(of: $0.strokes) }) {
+                    startUpgrade(page: page, paper: paper, said: utterances, box: box)
+                }
             }
         }
     }
 
     // MARK: upgrade (image model on the Mac)
 
+    /// Reaches the Mac's drawing server once at launch, so iOS asks for
+    /// local-network access right away (not in the middle of a drawing), and
+    /// the log says whether refining can work at all.
+    /// Tries each address the Mac might be reachable at (Wi-Fi, or the USB
+    /// cable's own link when the Wi-Fi keeps devices apart) and keeps the first
+    /// that answers. Repeats every 30 s until one does.
+    private func checkUpgradeServer() {
+        guard AppSettings.upgradeEnabled else { return }
+        for base in AppSettings.upgradeCandidates {
+            var req = URLRequest(url: base.appendingPathComponent("health"))
+            req.timeoutInterval = 6
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
+                let ok = error == nil && (data.flatMap { String(data: $0, encoding: .utf8) } ?? "").contains("true")
+                print("[DC] refine server \(base.absoluteString): \(ok ? "ok" : "unreachable (\(error?.localizedDescription ?? "bad reply"))")")
+                guard ok else { return }
+                DispatchQueue.main.async { if self?.upgradeBase == nil { self?.upgradeBase = base } }
+            }.resume()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if self?.upgradeBase == nil { self?.checkUpgradeServer() }
+        }
+    }
+    /// The address of the Mac's drawing server that answered.
+    private var upgradeBase: URL?
+
     /// Asks the Mac's drawing server for a nicer version of the outline just
     /// drawn. It swaps in only if this outline is still up and you haven't
-    /// started tracing it; otherwise Claude's outline simply stays.
-    private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
+    /// traced much of it (40%); otherwise Claude's outline simply stays.
+    private func startUpgrade(page: Data, paper: PaperSize, said: [String], box: PaperRect) {
         upgradeTask?.cancel()
         refining = false
-        guard !usingMock, AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL, let key = Keychain.apiKey,
-              let strokes = outline?.strokes, let box = UpgradeClient.bounds(of: strokes) else { return }
-        let revision = outlineRevision
+        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase ?? AppSettings.upgradeURL, let key = Keychain.apiKey else { return }
+        let turn = turnID
+        upgradeTurn = turn
         let id = String(format: "%04d", turnID)
         let t0 = CACurrentMediaTime()
         refining = true
+        print("[DC] upgrade: asking \(url.absoluteString) for \(said)")
         upgradeTask = Task { [weak self] in
             let result: [Stroke]?
             do {
@@ -285,16 +329,22 @@ final class AppModel: ObservableObject {
                 result = nil
             }
             guard let self, !Task.isCancelled else { return }
+            // Claude's draft may still be streaming in: swap once it's complete.
+            while self.inflight != nil, self.turnID == turn, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+            guard !Task.isCancelled else { return }
             self.refining = false
             let secs = CACurrentMediaTime() - t0
             guard let result else { return }
-            guard self.outlineRevision == revision, self.fadeStart == nil, var outline = self.outline else {
+            // Chatter since then (ignored turns) doesn't matter; a different outline does.
+            guard self.outlineTurn == turn, self.fadeStart == nil, var outline = self.outline else {
                 print(String(format: "[DC] upgrade arrived after %.1f s but the outline changed: dropped", secs))
                 return
             }
             let traced = self.trackState?.strokes.map(\.progress) ?? []
             let progress = traced.isEmpty ? 0 : traced.reduce(0, +) / Double(traced.count)
-            guard progress < 0.15 else {
+            guard progress < 0.4 else {
                 print(String(format: "[DC] upgrade arrived after %.1f s, already %.0f%% traced: kept Claude's", secs, progress * 100))
                 return
             }
@@ -308,13 +358,17 @@ final class AppModel: ObservableObject {
     /// Show a new outline that is still arriving. Clearing is paused until
     /// it's complete; if the turn is cancelled first, the old outline returns.
     private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle, reference: [Float]) {
-        upgradeTask?.cancel()
-        refining = false
-        let previous = (outline, tracker, trackState, fadeStart, aligner, correction)
+        // This turn's refinement may already be running (started at "place").
+        if upgradeTurn != turnID {
+            upgradeTask?.cancel()
+            refining = false
+        }
+        let previous = (outline, tracker, trackState, fadeStart, aligner, correction, outlineTurn)
         rollback = { [weak self] in
             guard let self else { return }
-            (self.outline, self.tracker, self.trackState, self.fadeStart, self.aligner, self.correction) = previous
+            (self.outline, self.tracker, self.trackState, self.fadeStart, self.aligner, self.correction, self.outlineTurn) = previous
         }
+        outlineTurn = turnID
         // The new outline's coordinates refer to this exact photo: align to it.
         aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
         correction = .identity
@@ -366,7 +420,18 @@ final class AppModel: ObservableObject {
 
     private func tick() {
         let now = CACurrentMediaTime()
+        debugTick(now)
         pageFound = ar.corners != nil && ar.trackingNormal
+        if !pageFound {
+            let hint: String
+            switch ar.lastMiss?.reason {
+            case "page cut off by the view edge"?: hint = "Move back so the whole page is in view"
+            case "page unsure"?, "no page seen"?: hint = "Show the whole page, hands off, for a second"
+            case let r? where r.hasPrefix("detections"): hint = "Hold the phone still for a second"
+            default: hint = "Looking for paper"
+            }
+            if pageHint != hint { pageHint = hint }
+        }
         if waitingForPage, ar.corners != nil, inflight == nil { sendTurn() }
         // You started talking: open the connection to the API now, so the
         // request at the end of the phrase doesn't also wait for the handshake.
@@ -406,7 +471,11 @@ final class AppModel: ObservableObject {
                 // The outline was replaced or is already fading: this result is stale.
                 guard let state, self.tracker === tracker, self.fadeStart == nil else { return }
                 self.trackState = state
-                if state.done { self.fadeStart = now }
+                if state.done {
+                    let traced = state.strokes.map(\.progress)
+                    print(String(format: "[DC] outline traced (%.0f%%) and left alone %.0f s: clearing", 100 * traced.reduce(0, +) / Double(max(1, traced.count)), state.idleSeconds))
+                    self.fadeStart = now
+                }
             }
         }
     }
@@ -430,6 +499,7 @@ final class AppModel: ObservableObject {
         let pixelBuffer = frame.capturedImage
         let prior = correction
         let version = ar.version
+        let base = ar.corners
         let (w, h) = (aligner.width, aligner.height)
         let dump = !dumpedAlignImages
         dumpedAlignImages = true
@@ -457,7 +527,7 @@ final class AppModel: ObservableObject {
                         self.pendingJump = nil
                         self.correction = found
                         print(String(format: "[DC] align: jump %.0f px confirmed", jump))
-                        self.repinToDrawing()
+                        self.repinToDrawing(from: base)
                     } else {
                         self.pendingJump = found
                         print(String(format: "[DC] align: jump %.0f px held for confirmation", jump))
@@ -477,7 +547,7 @@ final class AppModel: ObservableObject {
                 self.lastReading = nil
                 print(String(format: "[DC] align: move %.1f px  shift %.1f,%.1f  scale %.3f  rot %.3f", jump, found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
                 self.correction = previous.blended(toward: found, by: 0.5)
-                self.repinToDrawing()
+                self.repinToDrawing(from: base)
             }
         }
     }
@@ -499,13 +569,14 @@ final class AppModel: ObservableObject {
     /// Moves ARKit's page so the drawing sits exactly where it was measured,
     /// then starts the correction over from zero. Without this, ARKit's own
     /// error builds up as the phone moves and the correction has to chase it.
-    private func repinToDrawing() {
-        guard let map = referenceToCurrent else { return }
+    /// `base`: the page corners the reading was measured against (the outline
+    /// may have glided on since); the correction applies to those.
+    private func repinToDrawing(from base: [SIMD3<Float>]?) {
+        guard let map = referenceToCurrent, let base, base.count == 4 else { return }
         let paper = ar.paper
         let cornersNow = [PaperPoint(x: 0, y: 0), PaperPoint(x: paper.w, y: 0),
                           PaperPoint(x: paper.w, y: paper.h), PaperPoint(x: 0, y: paper.h)]
-        let moved = cornersNow.compactMap { ar.world(map.apply($0)) }
-        guard moved.count == 4 else { return }
+        let moved = cornersNow.map { ARController.world(map.apply($0), corners: base, paper: paper) }
         ar.repin(moved)
         ar.followDrawing = true
         lastLock = CACurrentMediaTime()
@@ -547,7 +618,10 @@ final class AppModel: ObservableObject {
     }
 
     func scene() -> Renderer.Scene {
-        let fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
+        var fade = fadeStart.map { Float(max(0, 1 - (CACurrentMediaTime() - $0) / 0.9)) } ?? 1
+        // Claude's quick outline is a draft while the better one is coming:
+        // shown faintly, so it's clear to wait rather than trace it.
+        if refining, outlineTurn == upgradeTurn { fade *= 0.4 }
         let map = referenceToCurrent
         let strokes: [Stroke]
         if let cached = mappedStrokes, cached.revision == outlineRevision, cached.map == map {
@@ -560,6 +634,64 @@ final class AppModel: ObservableObject {
         }
         return Renderer.Scene(headset: headset, strokes: strokes, style: outline?.style ?? .fallback,
                               progress: trackState?.strokes, fade: fade)
+    }
+
+    // MARK: debugging from the Mac (devicectl copies files in and out of Documents)
+
+    private var lastOverlay: TimeInterval = 0
+    private var overlayBusy = false
+
+    /// Documents/say.txt, pushed from the Mac, is treated as speech (then
+    /// deleted), so the whole flow can be tested without anyone talking.
+    /// While an outline is up, Documents/overlay.jpg shows the camera image
+    /// with the outline drawn where the screen draws it (same projection).
+    private func debugTick(_ now: TimeInterval) {
+        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let say = dir.appendingPathComponent("say.txt")
+            if let text = try? String(contentsOf: say, encoding: .utf8) {
+                try? FileManager.default.removeItem(at: say)
+                print("[DC] debug say: \(text)")
+                heard(text)
+            }
+        }
+        guard let outline, !outline.strokes.isEmpty, !overlayBusy, now - lastOverlay > 2,
+              let frame = ar.session.currentFrame else { return }
+        lastOverlay = now
+        let map = referenceToCurrent
+        let strokes: [[CGPoint]] = outline.strokes.map { s in
+            s.points.compactMap { p in
+                let q = map?.apply(p) ?? p
+                return ar.world(q).flatMap { ARController.project($0, camera: frame.camera) }
+            }
+        }
+        let style = outline.style
+        let image = CIImage(cvPixelBuffer: frame.capturedImage)
+        overlayBusy = true
+        alignQueue.async { [weak self] in
+            defer { DispatchQueue.main.async { self?.overlayBusy = false } }
+            let size = image.extent.size
+            guard let cg = CIContext().createCGImage(image, from: image.extent) else { return }
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: size.width / 2, height: size.height / 2))
+            let jpeg = renderer.jpegData(withCompressionQuality: 0.75) { ctx in
+                let g = ctx.cgContext
+                g.translateBy(x: 0, y: size.height / 2)
+                g.scaleBy(x: 0.5, y: -0.5)
+                g.draw(cg, in: CGRect(origin: .zero, size: size))
+                g.scaleBy(x: 1, y: -1)
+                g.translateBy(x: 0, y: -size.height)
+                g.setStrokeColor(UIColor.red.cgColor)
+                g.setLineWidth(3)
+                for pts in strokes where pts.count > 1 {
+                    g.move(to: pts[0]); pts.dropFirst().forEach { g.addLine(to: $0) }
+                }
+                g.strokePath()
+                let label = String(format: "ink rgb %.2f %.2f %.2f  width %.1f u", style.red, style.green, style.blue, style.width)
+                (label as NSString).draw(at: CGPoint(x: 20, y: 20), withAttributes: [.font: UIFont.boldSystemFont(ofSize: 36), .foregroundColor: UIColor.yellow])
+            }
+            if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                try? jpeg.write(to: dir.appendingPathComponent("overlay.jpg"))
+            }
+        }
     }
 
     // MARK: problems (setup issues only; the AI itself never "says" anything)

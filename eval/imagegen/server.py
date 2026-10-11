@@ -152,9 +152,11 @@ def describe_place(box, paper, fig, on_part):
 def build_prompt(said, place):
     words = " / ".join(s.strip() for s in said if s.strip())
     return (f"Edit this image of a pencil drawing on paper. The person drawing said: \"{words}\". "
-            f"Add the thing they asked for, {place}. Draw ONLY the new addition with clean, smooth, continuous "
-            f"red pen lines: simple line art with a single even line weight, no shading, no hatching, no fill, "
-            f"no other colours, no text. Leave everything that is already on the page exactly as it is: do not "
+            f"Add the thing they asked for, {place}. Draw it the way THIS person draws, as if the same hand made "
+            f"it: copy how they draw heads, faces, hair, bodies, arms, hands, legs and shoes, their proportions, how "
+            f"loose or careful their lines are and how much detail they use. If they ask for something like an "
+            f"existing figure, copy that figure's features closely. Draw ONLY the new addition, in continuous red "
+            f"pen lines of a single even weight: no shading, no solid fill, no other colours, no text. Leave everything that is already on the page exactly as it is: do not "
             f"move, redraw, resize, restyle, recolour or erase any existing grey pencil line, and keep the paper, "
             f"framing and position identical. Only add the new red lines.")
 

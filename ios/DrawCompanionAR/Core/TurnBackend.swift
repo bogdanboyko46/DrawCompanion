@@ -26,8 +26,9 @@ struct ClaudeBackend: TurnBackend {
         let gate = StrokeGate()
         let early: Task<Int, Error>? = guess.map { action in
             Task {
-                try await client.draw(page: page, paper: paper, utterances: utterances, current: current, action: action) {
-                    await gate.push($0)
+                try await client.draw(page: page, paper: paper, utterances: utterances, current: current, action: action,
+                                      onPlace: { await gate.push(.place($0)) }) {
+                    await gate.push(.stroke($0))
                 }
             }
         }
@@ -45,12 +46,12 @@ struct ClaudeBackend: TurnBackend {
             if action == .new || action == .revise {
                 let n: Int
                 if let early, action == guess {
-                    await gate.open { await emit(.stroke($0)) }
+                    await gate.open { await emit($0) }
                     n = try await early.value
                 } else {
                     early?.cancel()
-                    n = try await client.draw(page: page, paper: paper, utterances: utterances,
-                                              current: current, action: action) { await emit(.stroke($0)) }
+                    n = try await client.draw(page: page, paper: paper, utterances: utterances, current: current, action: action,
+                                              onPlace: { await emit(.place($0)) }) { await emit(.stroke($0)) }
                 }
                 print("[DC] draw: \(n) strokes")
             } else {
@@ -63,17 +64,17 @@ struct ClaudeBackend: TurnBackend {
     }
 }
 
-/// Holds strokes from a speculative drawing call until the filter agrees,
-/// then passes them on in order (buffered ones first).
+/// Holds events (place, strokes) from a speculative drawing call until the
+/// filter agrees, then passes them on in order (buffered ones first).
 actor StrokeGate {
-    private var buffer: [Stroke] = []
-    private var sink: ((Stroke) async -> Void)?
+    private var buffer: [TurnEvent] = []
+    private var sink: ((TurnEvent) async -> Void)?
 
-    func push(_ stroke: Stroke) async {
-        if let sink { await sink(stroke) } else { buffer.append(stroke) }
+    func push(_ event: TurnEvent) async {
+        if let sink { await sink(event) } else { buffer.append(event) }
     }
 
-    func open(_ sink: @escaping (Stroke) async -> Void) async {
+    func open(_ sink: @escaping (TurnEvent) async -> Void) async {
         // Strokes pushed while this drains land in the buffer and are drained too.
         while !buffer.isEmpty { await sink(buffer.removeFirst()) }
         self.sink = sink
