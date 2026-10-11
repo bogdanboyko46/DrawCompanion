@@ -202,7 +202,7 @@ struct ClaudeDirector {
             "energy": described(number, "0 calm … 1 hyper"),
             "friendliness": described(number, "0 shy … 1 outgoing"),
         ]),
-        "greeting": described(string, "A first line the character says when it appears, max 60 characters, in its voice."),
+        "greeting": described(string, "The first thing the character says as it pops into the room, max 50 characters, in its own voice: about itself or the moment (\"Hi! I'm Pip and I'm ready to bounce!\"). Never comment on the paper, the drawing, the desk or the photo."),
     ])
 
     static let reviewSchema: [String: Any] = object([

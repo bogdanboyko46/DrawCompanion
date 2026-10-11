@@ -177,7 +177,9 @@ actor OnDeviceEngine: CharacterBackend {
 
             // 2. Start the 3D build right away; it only needs the concept's id.
             enter(id, .sculpt)
-            let endpoint: MeshyClient.Endpoint = urls.count > 1 ? .multiImageTo3d : .imageTo3d
+            // Always the multi-view endpoint: the concept is a multi-view task even when
+            // the painter returns a single view, and image-to-3d rejects those (HTTP 400).
+            let endpoint: MeshyClient.Endpoint = .multiImageTo3d
             if w.sculptTask == nil {
                 var body: [String: Any] = [
                     "ai_model": meshModel,
