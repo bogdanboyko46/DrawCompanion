@@ -396,11 +396,17 @@ def fit_cubic(pts, tol, depth=0):
     n = len(pts)
     if n < 2:
         return []
-    if n == 2:
-        d = (pts[1] - pts[0]) / 3
-        return [np.array([pts[0], pts[0] + d, pts[1] - d, pts[1]])]
-    t_hat1 = pts[min(2, n - 1)] - pts[0]
-    t_hat2 = pts[max(n - 3, 0)] - pts[-1]
+    chord = pts[-1] - pts[0]
+    cl = np.hypot(*chord)
+    rel = pts - pts[0]
+    if n == 2 or (cl > 0 and (np.abs(chord[0] * rel[:, 1] - chord[1] * rel[:, 0]) / cl).max() <= min(tol, 0.6)):
+        # straight within tolerance: a true straight line, not a wobbly curve
+        d = chord / 3
+        return [np.array([pts[0], pts[0] + d, pts[-1] - d, pts[-1]])]
+    # end tangents from ~4 units in, so a pixel-scale hook at the end does not bend it
+    k = min(4, n - 1)
+    t_hat1 = pts[k] - pts[0]
+    t_hat2 = pts[n - 1 - k] - pts[-1]
     t_hat1 /= np.hypot(*t_hat1) or 1
     t_hat2 /= np.hypot(*t_hat2) or 1
     u = np.r_[0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]

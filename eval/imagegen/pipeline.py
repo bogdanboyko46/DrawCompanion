@@ -59,13 +59,13 @@ def process(orig_path, gen_path, verbose=False):
     gwarp = cv2.warpPerspective(gen, M, (W, H), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                                 borderValue=(128, 128, 128))
     # where the original page is (with a margin for the sheet edge)
-    _, _, o_ok = ink_mask(orig, 3.0, border=int(3.0 * 2))
+    o_ok, _ = page_mask(orig, 3.0, border=2, erode=5)
     ok_c = cv2.resize(o_ok.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST) > 0
     # ...and where the generated image actually shows paper: a model may crop or zoom,
     # so part of the page can lie outside its frame; its frame edge and any dark
     # surround (page edge, table) are not drawing
-    g_ok, _ = page_mask(gen, max(3.0, gen.shape[1] / 300))
-    e = max(8, gen.shape[1] // 100)
+    g_ok, _ = page_mask(gen, max(3.0, gen.shape[1] / 300), erode=7)
+    e = 6
     g_ok[:e] = g_ok[-e:] = False
     g_ok[:, :e] = g_ok[:, -e:] = False
     g_ok_c = cv2.warpPerspective(g_ok.astype(np.uint8), M, (W, H),
@@ -113,6 +113,7 @@ def process(orig_path, gen_path, verbose=False):
         out["registration"] = {k: v for k, v in st2.items() if k != "parts"}
         out["parts"], out["accept"] = st2["parts"], st2["accept"]
     # component clean-up: slivers that hug an original line, label remnants, dust
+    edge_zone = cv2.distanceTransform(ok_c.astype(np.uint8), cv2.DIST_L2, 5) < 12 * PPU
     n, lab, stats, _ = cv2.connectedComponentsWithStats(new.astype(np.uint8), connectivity=8)
     keep = np.zeros(n, bool)
     for k in range(1, n):
@@ -126,13 +127,18 @@ def process(orig_path, gen_path, verbose=False):
             continue
         if lb_c[y:y + h, x:x + w][sel].mean() > 0.6:          # a grid label the model redrew
             continue
+        if edge_zone[y:y + h, x:x + w][sel].mean() > 0.8:     # the sheet's edge / frame edge
+            continue
         keep[k] = True
     new = keep[lab]
     strokes = trace(new, ppu=PPU, snap_to=(dist_o, coords_o, lab_o) if mode == "diff" else None, snap_dist=R_OLD + 3)
     t_end = time.time()
     out["strokes"] = [{"role": s["role"], "weight": "medium", "d": to_d(s["segs"], s["closed"])} for s in strokes]
     out["stats"] = {"strokes": len(strokes), "segments": sum(len(s["segs"]) for s in strokes),
-                    "new_ink_units2": int(new.sum() / PPU ** 2)}
+                    "new_ink_units2": int(new.sum() / PPU ** 2),
+                    # share of the new drawing lying on/at the user's lines: ~0 for "next to
+                    # him" requests; a high value means the model drew over the figure
+                    "on_original": round(float((dist_u[new] < 4).mean()) if new.any() else 0.0, 3)}
     out["ms"] = {"register": int((t_reg - t0) * 1000), "extract_trace": int((t_end - t_reg) * 1000),
                  "total": int((t_end - t0) * 1000)}
     out["paper"] = {"w": Wu, "h": Hu}

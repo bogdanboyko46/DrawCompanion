@@ -75,7 +75,7 @@ def red_mask(rgb, line_px=3.0, hi=0.22, lo=0.12, min_area=None):
     return keep[lab], s
 
 
-def page_mask(rgb, line_px=3.0, border=0):
+def page_mask(rgb, line_px=3.0, border=0, erode=None):
     """Where the paper is (not the dark table / black wedge at the photo edge).
     border: px to ignore along the image edges (the page photos are cropped to the
     sheet, so their own edge shows as a dark line)."""
@@ -86,7 +86,8 @@ def page_mask(rgb, line_px=3.0, border=0):
     if border:
         ok[:border] = ok[-border:] = False
         ok[:, :border] = ok[:, -border:] = False
-    ok = cv2.erode(ok.astype(np.uint8), np.ones((int(line_px * 5) | 1,) * 2, np.uint8))
+    k = int(line_px * 5) | 1 if erode is None else int(erode) | 1
+    ok = cv2.erode(ok.astype(np.uint8), np.ones((k, k), np.uint8))
     return ok > 0, bg
 
 

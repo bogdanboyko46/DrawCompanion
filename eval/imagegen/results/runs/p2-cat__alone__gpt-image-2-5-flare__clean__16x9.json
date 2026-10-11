@@ -1,0 +1,54 @@
+{
+ "registration": {
+  "median": 159.2031792999962,
+  "p90": 246.0503227974024,
+  "rms_inliers": null,
+  "cover3": 0.0,
+  "cover5": 0.0,
+  "worst_part_median": 164.99464360643924,
+  "worst_part_shift": 0.0,
+  "edited_parts": 0,
+  "n_points": 1191,
+  "accept": false,
+  "ncc": 0.012242628261446953,
+  "scale_gen_px_per_orig_px": 0.7673330437300352
+ },
+ "parts": [
+  {
+   "n": 1088,
+   "median": 154.4423923667472,
+   "shift": 0.0,
+   "cover3": 0.0,
+   "edited": false,
+   "cx": 434.9831973805147,
+   "cy": 125.80542470894608
+  },
+  {
+   "n": 54,
+   "median": 164.99464360643924,
+   "shift": 0.0,
+   "cover3": 0.0,
+   "edited": false,
+   "cx": 422.59837962962956,
+   "cy": 147.56944444444443
+  }
+ ],
+ "accept": false,
+ "mode": "red",
+ "strokes": [],
+ "stats": {
+  "strokes": 0,
+  "segments": 0,
+  "new_ink_units2": 0,
+  "on_original": 0.0
+ },
+ "ms": {
+  "register": 568,
+  "extract_trace": 306,
+  "total": 874
+ },
+ "paper": {
+  "w": 1000,
+  "h": 444
+ }
+}

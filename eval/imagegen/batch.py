@@ -31,7 +31,7 @@ for f in sorted(os.listdir(gen_dir)):
     c = calls.get(tag, {})
     summary[tag] = {"accept": out["accept"], "mode": out.get("mode"), "median": round(r["median"], 2), "p90": round(r["p90"], 2),
                     "cover3": round(r["cover3"], 3), "worst_part": round(r["worst_part_median"] or 0, 2), "worst_shift": round(r.get("worst_part_shift") or 0, 2), "edited_parts": r.get("edited_parts"),
-                    "strokes": out["stats"]["strokes"], "cubics": out["stats"]["segments"], "proc_ms": out["ms"]["total"],
+                    "strokes": out["stats"]["strokes"], "cubics": out["stats"]["segments"], "on_original": out["stats"]["on_original"], "proc_ms": out["ms"]["total"],
                     "gen_s": c.get("s", {}).get("total"), "credits": c.get("credits"), "size": list(dbg["gen"].shape[1::-1])}
     print(tag, json.dumps(summary[tag]))
 json.dump(summary, open(summary_path, "w"), indent=1)
