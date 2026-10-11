@@ -14,7 +14,10 @@ enum AppSettings {
     static let upgradeOff = "dc.upgradeOff"
     static let defaultUpgradeServer = "http://100.70.57.3:8787"
 
-    static var upgradeEnabled: Bool { !UserDefaults.standard.bool(forKey: upgradeOff) }
+    /// Refining with the image model on the Mac is switched off (the user's
+    /// call): Claude's outline is final. Flip to bring it back.
+    static let upgradeAvailable = false
+    static var upgradeEnabled: Bool { upgradeAvailable && !UserDefaults.standard.bool(forKey: upgradeOff) }
     /// Where to look for the server: the address in Settings (or this Mac on
     /// Wi-Fi), then the Mac's end of the USB cable's network link.
     static var upgradeCandidates: [URL] {
@@ -149,8 +152,10 @@ struct SettingsView: View {
         Section {
             Toggle("Sample AI", isOn: $mockMode)
                 .onChange(of: mockMode) { _, _ in model.refreshKey() }
+            if AppSettings.upgradeAvailable {
             Toggle("Refine drawings on the Mac", isOn: Binding(get: { !upgradeOff }, set: { upgradeOff = !$0 }))
-            if !upgradeOff {
+            }
+            if AppSettings.upgradeAvailable, !upgradeOff {
                 TextField(AppSettings.defaultUpgradeServer, text: $upgradeServer)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
