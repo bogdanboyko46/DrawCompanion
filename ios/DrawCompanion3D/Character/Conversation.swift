@@ -179,7 +179,7 @@ final class Conversation {
             histories[id] = Array((history + [ChatTurn(fromUser: true, text: said), ChatTurn(fromUser: false, text: reply)])
                 .suffix(historyLength))
             state = .idle
-            guard character.anchor.parent != nil else { return clearCaption(after: 0.5) }
+            guard character.anchor.scene != nil else { return clearCaption(after: 0.5) }
             character.answer(reply)
             clearCaption(after: 1.5)
         } catch {
