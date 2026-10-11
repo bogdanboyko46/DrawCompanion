@@ -206,7 +206,7 @@ final class SceneController: NSObject, ARSessionDelegate {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 portal.dissolve {
                     character.root.isEnabled = true
-                    character.appear()
+                    character.emergeFromPaper()
                     c.resume()
                 }
             }

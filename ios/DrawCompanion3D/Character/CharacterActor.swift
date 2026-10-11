@@ -37,6 +37,7 @@ final class CharacterActor {
     private var nextDecision: TimeInterval = 3
     private var performUntil: TimeInterval = 0
     private var performStart: TimeInterval = 0
+    private var emergeStart: TimeInterval?
     private var lastGreet: TimeInterval = -100
     private var yaw: Float = 0
     private var desiredYaw: Float = 0
@@ -155,6 +156,46 @@ final class CharacterActor {
         }
     }
 
+    /// Comes out of the paper: lying flat exactly as drawn (head toward the
+    /// top of the page, face up), it fades up out of the page, then pivots on
+    /// its feet and stands up, facing you, with a little overshoot.
+    func emergeFromPaper() {
+        root.scale = SIMD3(repeating: 1)
+        yaw = 0
+        desiredYaw = 0
+        yawNode.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
+        body.position = [0, 0.003, 0] // just above the paper, no flicker
+        body.orientation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+        body.components.set(OpacityComponent(opacity: 0))
+        state = .appearing
+        _ = play("idle", transition: 0)
+        emergeStart = time
+    }
+
+    /// Drives the emerge animation; true while it's running.
+    private func emerging() -> Bool {
+        guard let start = emergeStart else { return false }
+        let t = time - start
+        let fade: TimeInterval = 0.5, rise: TimeInterval = 1.1
+        body.components.set(OpacityComponent(opacity: smoothstep(Float(t / fade))))
+        // Flat on the page while it fades in, then up onto its feet.
+        let p = Float(max(0, min(1, (t - fade * 0.8) / rise)))
+        let c1: Float = 1.6, c3 = c1 + 1 // ease-out-back: a little past upright, then settle
+        let eased = 1 + c3 * pow(p - 1, 3) + c1 * pow(p - 1, 2)
+        body.orientation = simd_quatf(angle: -.pi / 2 * (1 - eased), axis: [1, 0, 0])
+        body.position = [0, 0.003 * (1 - p), 0]
+        if t >= fade * 0.8 + rise {
+            emergeStart = nil
+            body.components.remove(OpacityComponent.self)
+            body.orientation = simd_quatf(angle: 0, axis: [1, 0, 0])
+            body.position = .zero
+            state = .idle
+            greet()
+            if let line = job.character?.greeting, !line.isEmpty { onSpeak?(self, line) }
+        }
+        return true
+    }
+
     // MARK: Commands
 
     func greet() {
@@ -211,6 +252,7 @@ final class CharacterActor {
 
     func update(deltaTime dt: TimeInterval, cameraPosition: SIMD3<Float>) {
         time += dt
+        if emerging() { return }
         let pos = root.position
         let cam = anchor.convert(position: cameraPosition, from: nil)
         let toCam = SIMD2<Float>(cam.x - pos.x, cam.z - pos.z)
