@@ -6,33 +6,50 @@ import SwiftUI
 /// only for setup problems. Double-tap (the viewer's button twice) to exit.
 struct HeadsetOverlay: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.displayScale) private var displayScale
+    /// Bumped when settings change, so the dot follows the lens layout.
+    @State private var settingsVersion = 0
 
     var body: some View {
-        HStack(spacing: 0) {
-            eye
-            eye
+        GeometryReader { geo in
+            let optics = HeadsetOptics(defaults: .standard)
+            let layout = optics.layout(screenWidth: geo.size.width * displayScale, screenHeight: geo.size.height * displayScale)
+            ZStack {
+                ForEach(0..<layout.eyes.count, id: \.self) { i in
+                    eye(at: { x, y in
+                        let p = optics.screenPoint(eye: layout.eyes[i], layout: layout, eyeTanX: x, eyeTanY: y)
+                        return CGPoint(x: p.x / displayScale, y: p.y / displayScale)
+                    }, textWidth: optics.fieldTan * layout.pixelsPerTan / displayScale)
+                }
+            }
+            .id(settingsVersion)
         }
         .ignoresSafeArea()
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.exitHeadset() }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).receive(on: RunLoop.main)) { _ in
+            settingsVersion += 1
+        }
     }
 
-    private var eye: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            if let problem = model.problem {
-                Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(.black.opacity(0.6), in: Capsule())
-                    .padding(.horizontal, 24)
-            }
-            StatusDot()
-                .padding(.bottom, 20)
+    /// The dot and any problem text, placed low in what this eye sees through
+    /// its lens (`point` maps a direction seen by the eye, in tan units, to
+    /// screen points), so they're inside the field, not lost past its edge.
+    @ViewBuilder
+    private func eye(at point: (Double, Double) -> CGPoint, textWidth: Double) -> some View {
+        if let problem = model.problem {
+            Text(problem)
+                .font(.caption)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.6), in: Capsule())
+                .frame(width: max(80, textWidth))
+                .position(point(0, 0.42))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        StatusDot()
+            .position(point(0, 0.6))
     }
 }
 
