@@ -48,6 +48,8 @@ final class AppModel {
     @ObservationIgnored private let local = LocalLibrary()
     @ObservationIgnored private var page: CapturedPage?
     @ObservationIgnored private var speechTimers: [String: Task<Void, Never>] = [:]
+    /// Hold-to-talk with the character in the room (observable on its own).
+    @ObservationIgnored let talk = Conversation()
 
     var hasCharacters: Bool { !scene.actors.isEmpty }
 
@@ -263,9 +265,11 @@ final class AppModel {
     private func say(_ text: String, by character: CharacterActor) {
         let id = character.job.id
         speech[id] = SpeechLine(characterID: id, name: character.name, text: text)
+        CharacterVoice.shared.speak(text, by: character)
         speechTimers[id]?.cancel()
         speechTimers[id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3.2))
+            // Long enough to read, and to hear spoken (longer replies take longer).
+            try? await Task.sleep(for: .seconds(max(3.2, 1.5 + Double(text.count) * 0.065)))
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { _ = self?.speech.removeValue(forKey: id) }
         }

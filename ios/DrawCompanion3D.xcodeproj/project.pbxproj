@@ -207,7 +207,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = DrawCompanion;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DrawCompanion uses the camera to see your drawing and place your character in the room.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DrawCompanion talks to the companion server on your Mac to turn drawings into 3D characters.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used only if you record a video of your character with sound.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DrawCompanion listens while you hold the talk button, so you can talk to your character.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Your words are turned into text (on this iPhone when it can be) so your character can answer you.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save photos and videos of your characters.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -241,7 +242,8 @@
 				INFOPLIST_KEY_CFBundleDisplayName = DrawCompanion;
 				INFOPLIST_KEY_NSCameraUsageDescription = "DrawCompanion uses the camera to see your drawing and place your character in the room.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "DrawCompanion talks to the companion server on your Mac to turn drawings into 3D characters.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Used only if you record a video of your character with sound.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DrawCompanion listens while you hold the talk button, so you can talk to your character.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Your words are turned into text (on this iPhone when it can be) so your character can answer you.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save photos and videos of your characters.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
