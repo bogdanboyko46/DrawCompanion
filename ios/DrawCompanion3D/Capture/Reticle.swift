@@ -5,10 +5,13 @@ import CoreGraphics
 /// The SwiftUI overlay and the capture code both use this, so what you see
 /// framed is exactly what's captured.
 enum Reticle {
+    /// Portrait 3:4, since standing figures are taller than wide (and their feet
+    /// shouldn't end up at the very edge).
     static func rect(in size: CGSize) -> CGRect {
-        let side = min(size.width * 0.82, size.height * 0.48)
+        let height = min(size.width * 0.82 * 4 / 3, size.height * 0.56)
+        let width = height * 3 / 4
         // Slightly above center, clear of the controls at the bottom.
-        return CGRect(x: (size.width - side) / 2, y: size.height * 0.42 - side / 2, width: side, height: side)
+        return CGRect(x: (size.width - width) / 2, y: size.height * 0.42 - height / 2, width: width, height: height)
     }
 
     /// Corners as seen on screen: top-left, top-right, bottom-right, bottom-left.

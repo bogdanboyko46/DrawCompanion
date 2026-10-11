@@ -30,6 +30,25 @@ struct CapturedPage {
     var transform: simd_float4x4
     var size: SIMD2<Float>
     var measured: Bool
+    /// Where the drawn figure is in the frame (fractions, top-left origin), if found.
+    var figureBox: CGRect? = nil
+
+    /// The figure's real height on the surface, in meters (its padding removed).
+    var figureHeight: Float? {
+        guard measured, let b = figureBox else { return nil }
+        return Float(max(0.01, b.height - 0.06)) * size.y
+    }
+
+    /// The world transform of the point between the figure's feet, on the surface,
+    /// so the character stands exactly where it was drawn.
+    var feetTransform: simd_float4x4? {
+        guard measured, let b = figureBox else { return nil }
+        let x = Float(b.midX - 0.5) * size.x
+        let z = Float(b.maxY - 0.03 - 0.5) * size.y
+        var t = transform
+        t.columns.3 = transform * SIMD4<Float>(x, 0, z, 1)
+        return t
+    }
 }
 
 enum PageScanner {

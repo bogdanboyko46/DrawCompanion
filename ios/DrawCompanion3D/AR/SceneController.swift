@@ -34,10 +34,10 @@ final class SceneController: NSObject, ARSessionDelegate {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentationWithDepth) {
             config.frameSemantics.insert(.personSegmentationWithDepth) // your hand passes in front of it
         }
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) {
-            config.sceneReconstruction = .mesh // LiDAR: real objects occlude it
-            arView.environment.sceneUnderstanding.options.insert(.occlusion)
-        }
+        // No LiDAR scene-mesh occlusion: the reconstructed table surface sits a
+        // little above the real one and cut off characters' feet. (It also costs
+        // CPU we'd rather spend on rendering.) Hands still occlude via people
+        // segmentation above.
         arView.renderOptions.insert(.disableMotionBlur)
         arView.session.delegate = self
         arView.session.run(config)
@@ -84,6 +84,7 @@ final class SceneController: NSObject, ARSessionDelegate {
             return CGPoint(x: n.x, y: 1 - n.y)
         }
         let viewCorners = Reticle.corners(in: viewport)
+        let frameAspect = Reticle.rect(in: viewport).width / Reticle.rect(in: viewport).height
         let region = DetectedPage(imageCorners: viewCorners.map(toImage), confidence: 1)
         let buffer = frame.capturedImage
 
@@ -104,7 +105,7 @@ final class SceneController: NSObject, ARSessionDelegate {
         log("raycast measured=\(measured)")
 
         let result: (Data, CGImage)? = await withCheckedContinuation { c in
-            detectQueue.async { c.resume(returning: PageScanner.rectify(buffer, page: region, aspect: 1)) }
+            detectQueue.async { c.resume(returning: PageScanner.rectify(buffer, page: region, aspect: frameAspect)) }
         }
         guard let result else { throw CaptureError.noFrame }
         let (jpeg, image) = result
@@ -114,7 +115,7 @@ final class SceneController: NSObject, ARSessionDelegate {
         }
         log("isolated: \(isolated.map { "figure \($0.figure.width)x\($0.figure.height) box \($0.box)" } ?? "none")")
         return CapturedPage(jpeg: jpeg, image: image, cutout: isolated?.cutout, figureJPEG: isolated?.figureJPEG, worldCorners: world,
-                            transform: transform, size: size, measured: measured)
+                            transform: transform, size: size, measured: measured, figureBox: isolated?.box)
     }
 
     private func highResolutionFrame() async throws -> ARFrame {
@@ -159,9 +160,11 @@ final class SceneController: NSObject, ARSessionDelegate {
 
     /// Bursts the portal and brings the character to life where the drawing was.
     func materialize(job: CharacterJob, modelURL: URL, page: CapturedPage?, usePortal: Bool = true) async throws -> CharacterActor {
-        let transform = page?.transform ?? placementInFront()
-        let paperLong = page.map { max($0.size.x, $0.size.y) } ?? 0.28
-        let height = min(0.5, max(0.15, paperLong * 0.85))
+        // To scale and in place: as tall as the figure is drawn, standing on its
+        // drawn feet. Without a measurement, a 25 cm character in front of you.
+        let transform = page?.feetTransform ?? page?.transform ?? placementInFront()
+        let height = min(0.6, max(0.04, page?.figureHeight ?? 0.25))
+        print("[place] height \(String(format: "%.3f", height)) m, measured \(page?.measured ?? false)")
         let origin = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let character = try await CharacterActor.load(job: job, modelURL: modelURL, transform: transform, height: height)
         character.onSpeak = { [weak self] a, line in self?.onSpeak?(a, line) }

@@ -73,7 +73,8 @@ final class CharacterActor {
         let extents = bounds.extents
         let s = extents.y > 0.0001 ? height / extents.y : 1
         model.scale = SIMD3(repeating: s)
-        model.position = [-bounds.center.x * s, -bounds.min.y * s, -bounds.center.z * s]
+        // A couple of millimeters up so the soles rest on the table, not in it.
+        model.position = [-bounds.center.x * s, -bounds.min.y * s + 0.002, -bounds.center.z * s]
 
         body.addChild(model)
         yawNode.addChild(body)
