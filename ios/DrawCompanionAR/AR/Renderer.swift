@@ -145,8 +145,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.strokeStencil = strokeStencil
         self.noStencil = noStencil
 
-        var positions = [MTLSamplePosition](repeating: MTLSamplePosition(x: 0.5, y: 0.5), count: Self.sampleCount)
-        device.getDefaultSamplePositions(&positions, count: Self.sampleCount)
+        // Where the MSAA samples sit in a pixel (standard 4x pattern if unknown).
+        var positions = device.getDefaultSamplePositions(sampleCount: Self.sampleCount)
+        if positions.count < 4 {
+            positions = [MTLSamplePosition(x: 0.375, y: 0.125), MTLSamplePosition(x: 0.875, y: 0.375),
+                         MTLSamplePosition(x: 0.125, y: 0.625), MTLSamplePosition(x: 0.625, y: 0.875)]
+        }
         samplePositions = (SIMD4(positions[0].x, positions[0].y, positions[1].x, positions[1].y),
                            SIMD4(positions[2].x, positions[2].y, positions[3].x, positions[3].y))
 
