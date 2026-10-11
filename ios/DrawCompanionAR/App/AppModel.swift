@@ -276,15 +276,27 @@ final class AppModel: ObservableObject {
     /// Reaches the Mac's drawing server once at launch, so iOS asks for
     /// local-network access right away (not in the middle of a drawing), and
     /// the log says whether refining can work at all.
+    /// Tries each address the Mac might be reachable at (Wi-Fi, or the USB
+    /// cable's own link when the Wi-Fi keeps devices apart) and keeps the first
+    /// that answers. Repeats every 30 s until one does.
     private func checkUpgradeServer() {
-        guard AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL?.appendingPathComponent("health") else { return }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 8
-        URLSession.shared.dataTask(with: req) { data, _, error in
-            let reply = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            print("[DC] refine server \(url.absoluteString): \(error.map { "unreachable (\($0.localizedDescription))" } ?? "ok \(reply)")")
-        }.resume()
+        guard AppSettings.upgradeEnabled else { return }
+        for base in AppSettings.upgradeCandidates {
+            var req = URLRequest(url: base.appendingPathComponent("health"))
+            req.timeoutInterval = 6
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, error in
+                let ok = error == nil && (data.flatMap { String(data: $0, encoding: .utf8) } ?? "").contains("true")
+                print("[DC] refine server \(base.absoluteString): \(ok ? "ok" : "unreachable (\(error?.localizedDescription ?? "bad reply"))")")
+                guard ok else { return }
+                DispatchQueue.main.async { if self?.upgradeBase == nil { self?.upgradeBase = base } }
+            }.resume()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if self?.upgradeBase == nil { self?.checkUpgradeServer() }
+        }
     }
+    /// The address of the Mac's drawing server that answered.
+    private var upgradeBase: URL?
 
     /// Asks the Mac's drawing server for a nicer version of the outline just
     /// drawn. It swaps in only if this outline is still up and you haven't
@@ -292,7 +304,7 @@ final class AppModel: ObservableObject {
     private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
         upgradeTask?.cancel()
         refining = false
-        guard !usingMock, AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL, let key = Keychain.apiKey,
+        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase ?? AppSettings.upgradeURL, let key = Keychain.apiKey,
               let strokes = outline?.strokes, let box = UpgradeClient.bounds(of: strokes) else { return }
         let revision = outlineRevision
         let id = String(format: "%04d", turnID)
