@@ -12,7 +12,7 @@ Updated: 2026-10-11, early night (EST evening).
 
 | Item | Status | CI |
 |---|---|---|
-| Retries on transient API errors (429, 5xx, 529 overloaded, dropped connection, timeouts): 2 retries after 0.4 s and 1.2 s; never after strokes are already on the paper; a cancelled turn stops at once | READY TO MERGE | green, run 24 |
+| Retries on transient API errors (429, 5xx, 529 overloaded, dropped connection, timeouts): 2 retries after 0.4 s and 1.2 s; never after strokes are already on the paper; a cancelled turn stops at once | READY TO MERGE | green, runs 24 and 34 (latest, includes the lead-branch merge) |
 | Clear errors: wrong key (401), not allowed (403), no credit (402), rate limited (429), overloaded (5xx/529), Claude declined (refusal) | READY TO MERGE | green |
 | Never a silent "nothing happened": a drawing with no visible stroke (the "M 0 0" answer) is retried, then reported as "Claude didn't draw anything for that. Try saying it differently." Dots and zero-length strokes are dropped | READY TO MERGE | green |
 | Filter: revise-vs-new fix. Revise only when the words are about the shown outline itself; a request for a different thing (outline from "add an arm", then "can you add teeth to the smile?") is new. Same wording in `server/suggest.js` | READY TO MERGE (prompt change; to measure with `node eval/run.mjs filter`) | green |
