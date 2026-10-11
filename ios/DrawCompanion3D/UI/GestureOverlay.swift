@@ -25,7 +25,8 @@ struct GestureOverlay: View {
         HStack(spacing: 10) {
             hint("🫰", model.hasCharacters ? "new" : "scan")
             if model.hasCharacters {
-                hint("✋", "talk")
+                hint("🤫", "talk")
+                hint("✋", "hi")
                 hint("👉", "move")
                 hint("👍", "cheer")
                 hint("✌️", "photo")

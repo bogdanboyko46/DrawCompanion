@@ -4,7 +4,8 @@ import SwiftUI
 /// things with a gesture:
 ///
 ///   snap your fingers   scan the drawing in the frame and bring it to life
-///   hold an open palm   talk to the character (lower your hand to send)
+///   say "shhh"           the character listens; talk, then pause and it answers
+///   open palm           the characters wave hello
 ///   point at the table  the character walks there
 ///   thumbs up / clap    the characters cheer
 ///   peace sign          take a photo
@@ -18,6 +19,7 @@ extension AppModel {
             switch sound {
             case .snap: self?.snapToScan()
             case .clap: self?.cheer(flash: "👏")
+            case .shush: self?.shushToTalk()
             }
         }
         hands.onBegan = { [weak self] pose in self?.handBegan(pose) }
@@ -58,9 +60,9 @@ extension AppModel {
     private func handBegan(_ pose: HandGestures.Pose) {
         switch pose {
         case .palm:
-            guard phase == .alive, hasCharacters else { return }
-            flash("✋")
-            startTalking()
+            guard hasCharacters else { return }
+            flash("👋")
+            for character in scene.actors { character.express("greet") }
         case .thumbsUp:
             cheer(flash: "👍")
         case .peace:
@@ -72,8 +74,26 @@ extension AppModel {
         }
     }
 
-    private func handEnded(_ pose: HandGestures.Pose) {
-        if pose == .palm { stopTalking() }
+    private func handEnded(_ pose: HandGestures.Pose) {}
+
+    /// "Shhh" → the character listens. You talk; a pause of about 1.5 s after
+    /// your last word sends it (or 6 s of nothing cancels).
+    private func shushToTalk() {
+        guard phase == .alive, hasCharacters, talk.state == .idle else { return }
+        flash("🤫")
+        startTalking()
+        guard talk.state == .listening else { return }
+        Task {
+            var lastText = "", lastChange = Date(), started = Date()
+            while talk.state == .listening {
+                try? await Task.sleep(for: .milliseconds(250))
+                if talk.caption != lastText { lastText = talk.caption; lastChange = Date() }
+                let quietFor = Date().timeIntervalSince(lastChange)
+                if !lastText.isEmpty && quietFor > 1.5 { break }
+                if lastText.isEmpty && Date().timeIntervalSince(started) > 6 { break }
+            }
+            stopTalking()
+        }
     }
 
     private func pointed(at tip: CGPoint) {

@@ -1,14 +1,15 @@
 import AVFoundation
 import SoundAnalysis
 
-/// Listens for a finger snap or a clap with Apple's built-in sound classifier,
+/// Listens for a finger snap or a clap (Apple's built-in sound classifier) and
+/// a "shhh" (a steady hiss, detected directly: the classifier has no shush),
 /// so the app can be driven hands-free in AR.
 ///
 /// Runs its own audio engine on the mic. It pauses while you're talking to a
 /// character (speech recognition needs the mic then) and resumes afterwards.
 @MainActor
 final class SoundGestures {
-    enum Sound { case snap, clap }
+    enum Sound { case snap, clap, shush }
 
     var onSound: ((Sound) -> Void)?
     private(set) var running = false
@@ -62,8 +63,13 @@ final class SoundGestures {
             try analyzer.add(request, withObserver: observer)
             self.analyzer = analyzer
             let queue = self.queue
+            let hiss = HissDetector()
+            hiss.onShush = { [weak self] in Task { @MainActor in self?.heard(.shush, 1) } }
             input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
-                queue.async { analyzer.analyze(buffer, atAudioFramePosition: when.sampleTime) }
+                queue.async {
+                    analyzer.analyze(buffer, atAudioFramePosition: when.sampleTime)
+                    hiss.feed(buffer)
+                }
             }
             engine.prepare()
             try engine.start()
@@ -115,11 +121,49 @@ final class SoundGestures {
                 onHeard?(.snap, snap.confidence)
             } else if let clap = result.classification(forIdentifier: "clapping"), clap.confidence > 0.7 {
                 onHeard?(.clap, clap.confidence)
+            } else if let hiss = ["snake_hiss", "whispering"].compactMap({ result.classification(forIdentifier: $0) })
+                        .max(by: { $0.confidence < $1.confidence }), hiss.confidence > 0.75 {
+                onHeard?(.shush, hiss.confidence)
             }
         }
 
         func request(_ request: SNRequest, didFailWithError error: Error) {
             print("[sound] analysis failed: \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Spots a "shhh": a steady hiss for about half a second. A hiss has a very
+/// high zero-crossing rate (vowels and most noise don't) and keeps going
+/// (snaps and claps are over in a blink). Runs on the analysis queue.
+final class HissDetector: @unchecked Sendable {
+    var onShush: (() -> Void)?
+    private var run = 0
+    private var noiseFloor: Float = 0.002
+    private var cooldown = 0
+
+    func feed(_ buffer: AVAudioPCMBuffer) {
+        guard let data = buffer.floatChannelData?[0] else { return }
+        let n = Int(buffer.frameLength)
+        guard n > 1 else { return }
+        var energy: Float = 0, crossings = 0
+        for i in 0..<n {
+            energy += data[i] * data[i]
+            if i > 0, (data[i] >= 0) != (data[i - 1] >= 0) { crossings += 1 }
+        }
+        let rms = (energy / Float(n)).squareRoot()
+        let zcr = Float(crossings) / Float(n)
+        // Track the room's background level so "loud enough" adapts.
+        if rms < noiseFloor * 2 { noiseFloor = noiseFloor * 0.95 + rms * 0.05 }
+        if cooldown > 0 { cooldown -= 1; return }
+        let hissy = zcr > 0.28 && rms > max(0.006, noiseFloor * 4)
+        run = hissy ? run + 1 : 0
+        // ~0.45 s of hiss at 4096-frame buffers (48 kHz → 85 ms each).
+        let needed = max(4, Int(0.45 * buffer.format.sampleRate / Double(n)))
+        if run >= needed {
+            run = 0
+            cooldown = needed * 3
+            onShush?()
         }
     }
 }
