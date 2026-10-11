@@ -158,28 +158,40 @@ actor OnDeviceEngine: CharacterBackend {
 
             // 1. Paint a clean concept: front, side and back views of the same design.
             enter(id, .concept)
-            if w.conceptTask == nil || !w.done.contains(.concept) {
-                let task = try await meshy.create(.imageToImage, body: [
-                    "ai_model": imageModel,
-                    "prompt": Self.conceptPrompt(hint: hint),
-                    "reference_image_urls": [drawingURI],
-                    "generate_multi_view": true,
-                ])
-                w.conceptTask = task
-                work[id] = w
+            var urls: [String] = []
+            if !w.done.contains(.concept) { do {
+                if w.conceptTask == nil {
+                    let task = try await meshy.create(.imageToImage, body: [
+                        "ai_model": imageModel,
+                        "prompt": Self.conceptPrompt(hint: hint),
+                        "reference_image_urls": [drawingURI],
+                        "generate_multi_view": true,
+                    ])
+                    w.conceptTask = task
+                    work[id] = w
+                }
+                let concept = try await meshy.wait(.imageToImage, w.conceptTask!, timeout: 90) { p in await self.progress(id, p) }
+                urls = concept.image_urls ?? []
+                if urls.isEmpty { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // No concept: build straight from the drawing rather than fail.
+                print("[engine] \(id) concept failed, building from the drawing: \(error.localizedDescription)")
+                w.conceptTask = nil
+                urls = []
             }
-            let concept = try await meshy.wait(.imageToImage, w.conceptTask!) { p in await self.progress(id, p) }
-            let urls = concept.image_urls ?? []
-            guard !urls.isEmpty else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
             w.conceptViews = urls.count
+            } // a retry reuses the concept (or the fallback) from the first attempt
             w.done.insert(.concept)
             work[id] = w
 
             // 2. Start the 3D build right away; it only needs the concept's id.
             enter(id, .sculpt)
-            // Always the multi-view endpoint: the concept is a multi-view task even when
-            // the painter returns a single view, and image-to-3d rejects those (HTTP 400).
-            let endpoint: MeshyClient.Endpoint = .multiImageTo3d
+            // From the concept, always the multi-view endpoint: the concept is a
+            // multi-view task even when the painter returns a single view, and
+            // image-to-3d rejects those (HTTP 400). Without one, from the drawing.
+            let endpoint: MeshyClient.Endpoint = w.conceptTask == nil ? .imageTo3d : .multiImageTo3d
             if w.sculptTask == nil {
                 var body: [String: Any] = [
                     "ai_model": meshModel,
@@ -187,8 +199,8 @@ actor OnDeviceEngine: CharacterBackend {
                     "enable_pbr": false,
                     "should_remesh": false,
                     "target_formats": ["usdz"],
-                    "input_task_id": w.conceptTask!,
                 ]
+                if let concept = w.conceptTask { body["input_task_id"] = concept } else { body["image_url"] = drawingURI }
                 if let texture = w.sheet?.texture_prompt, !texture.isEmpty { body["texture_prompt"] = texture }
                 w.sculptTask = try await meshy.create(endpoint, body: body)
                 work[id] = w
@@ -207,8 +219,10 @@ actor OnDeviceEngine: CharacterBackend {
                 for await (i, f) in group { out[i] = f }
                 return out.compactMap { $0 }
             }
-            jobs[id]?.conceptViews = files
-            showView(id, urls.count > 2 ? 1 : 0) // a guess until the check picks the front
+            if !files.isEmpty {
+                jobs[id]?.conceptViews = files
+                showView(id, urls.count > 2 ? 1 : 0) // a guess until the check picks the front
+            }
 
             if let reading {
                 do {
@@ -249,7 +263,12 @@ actor OnDeviceEngine: CharacterBackend {
                 }
             }
 
-            let sculpt = try await meshy.wait(endpoint, sculptTask) { p in await self.progress(id, p) }
+            let sculpt: MeshyClient.Task
+            do {
+                sculpt = try await meshy.wait(endpoint, sculptTask, timeout: 240) { p in await self.progress(id, p) }
+            } catch let error as MeshyClient.MeshyError where error.retryable {
+                throw MeshyClient.MeshyError(message: "Meshy is running slow right now. Tap Retry to keep waiting for this character.")
+            }
             w.done.insert(.sculpt)
             work[id] = w
 
