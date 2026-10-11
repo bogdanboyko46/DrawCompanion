@@ -18,6 +18,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastHeard = ""
     @Published private(set) var problem: String?
     @Published private(set) var usingMock = true
+    /// A nicer version of the new outline is being drawn on the Mac.
+    @Published private(set) var refining = false
 
     let ar = ARController()
     private let speech = SpeechListener()
@@ -69,6 +71,11 @@ final class AppModel: ObservableObject {
     private var turnID = 0
     private var rollback: (() -> Void)?
     private var waitingForPage = false
+
+    private var upgradeTask: Task<Void, Never>?
+    /// The tracing baseline of the current outline, to restart tracking when
+    /// its strokes are swapped for the upgraded ones.
+    private var trackBaseline: (gray: [Float], height: Int, paper: PaperSize)?
 
     private var timer: Timer?
     private var alignTimer: Timer?
@@ -201,7 +208,7 @@ final class AppModel: ObservableObject {
                     if case .action(let a) = event { print(String(format: "[DC] t+%.0f ms action %@", (CACurrentMediaTime() - t0) * 1000, a.rawValue)) }
                     if case .stroke = event, self.turnDrawing == false { print(String(format: "[DC] t+%.0f ms first stroke", (CACurrentMediaTime() - t0) * 1000)) }
                     if case .done = event { print(String(format: "[DC] t+%.0f ms done", (CACurrentMediaTime() - t0) * 1000)) }
-                    self.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style, reference: reference)
+                    self.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style, reference: reference, page: photos.full)
                 }
             } catch {
                 guard id == self.turnID, !Task.isCancelled else { return }
@@ -222,7 +229,7 @@ final class AppModel: ObservableObject {
     private var turnDrawing = false
 
     private func handle(_ event: TurnEvent, turn id: Int, utterances: [String], baseline: (gray: [Float], height: Int),
-                        paper: PaperSize, style: InkStyle, reference: [Float]) {
+                        paper: PaperSize, style: InkStyle, reference: [Float], page: Data) {
         guard id == turnID else { return } // a newer turn replaced this one
         switch event {
         case let .action(action):
@@ -240,13 +247,61 @@ final class AppModel: ObservableObject {
         case .done:
             pending.removeFirst(min(utterances.count, pending.count))
             rollback = nil
-            if turnDrawing { startTracking(baseline: baseline, paper: paper) }
+            if turnDrawing {
+                startTracking(baseline: baseline, paper: paper)
+                if turnAction == .new { startUpgrade(page: page, paper: paper, said: utterances) }
+            }
+        }
+    }
+
+    // MARK: upgrade (image model on the Mac)
+
+    /// Asks the Mac's drawing server for a nicer version of the outline just
+    /// drawn. It swaps in only if this outline is still up and you haven't
+    /// started tracing it; otherwise Claude's outline simply stays.
+    private func startUpgrade(page: Data, paper: PaperSize, said: [String]) {
+        upgradeTask?.cancel()
+        refining = false
+        guard !usingMock, AppSettings.upgradeEnabled, let url = AppSettings.upgradeURL,
+              let strokes = outline?.strokes, let box = UpgradeClient.bounds(of: strokes) else { return }
+        let revision = outlineRevision
+        let id = String(format: "%04d", turnID)
+        let t0 = CACurrentMediaTime()
+        refining = true
+        upgradeTask = Task { [weak self] in
+            let result: [Stroke]?
+            do {
+                result = try await UpgradeClient(baseURL: url).upgrade(page: page, paper: paper, said: said, box: box, id: id)
+            } catch {
+                print("[DC] upgrade failed: \(error.localizedDescription)")
+                result = nil
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.refining = false
+            let secs = CACurrentMediaTime() - t0
+            guard let result else { return }
+            guard self.outlineRevision == revision, self.fadeStart == nil, var outline = self.outline else {
+                print(String(format: "[DC] upgrade arrived after %.1f s but the outline changed: dropped", secs))
+                return
+            }
+            let traced = self.trackState?.strokes.map(\.progress) ?? []
+            let progress = traced.isEmpty ? 0 : traced.reduce(0, +) / Double(traced.count)
+            guard progress < 0.15 else {
+                print(String(format: "[DC] upgrade arrived after %.1f s, already %.0f%% traced: kept Claude's", secs, progress * 100))
+                return
+            }
+            print(String(format: "[DC] upgrade: %d strokes after %.1f s, swapped in", result.count, secs))
+            outline.strokes = result
+            self.outline = outline
+            if let b = self.trackBaseline { self.startTracking(baseline: (b.gray, b.height), paper: b.paper) }
         }
     }
 
     /// Show a new outline that is still arriving. Clearing is paused until
     /// it's complete; if the turn is cancelled first, the old outline returns.
     private func beginOutline(action: TurnAction, utterances: [String], style: InkStyle, reference: [Float]) {
+        upgradeTask?.cancel()
+        refining = false
         let previous = (outline, tracker, trackState, fadeStart, aligner, correction)
         rollback = { [weak self] in
             guard let self else { return }
@@ -275,11 +330,15 @@ final class AppModel: ObservableObject {
 
     private func startTracking(baseline: (gray: [Float], height: Int), paper: PaperSize) {
         guard let outline else { return }
+        trackBaseline = (baseline.gray, baseline.height, paper)
+        trackState = nil
         tracker = CompletionTracker(baseline: baseline.gray, width: Self.trackWidth, height: baseline.height,
                                     paper: paper, strokes: outline.strokes, now: CACurrentMediaTime())
     }
 
     func clearOutline() {
+        upgradeTask?.cancel()
+        refining = false
         ar.followDrawing = false
         aligner = nil
         correction = .identity

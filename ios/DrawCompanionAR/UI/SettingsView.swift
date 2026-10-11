@@ -8,6 +8,17 @@ enum AppSettings {
     static let mockMode = "dc.mockMode"
     /// Base pause that ends a spoken phrase, in seconds.
     static let speechPause = SpeechListener.pauseKey
+    /// Address of the Mac's drawing server (eval/imagegen/server.py).
+    static let upgradeServer = "dc.upgradeServer"
+    /// Set to true to stop asking the Mac for nicer drawings.
+    static let upgradeOff = "dc.upgradeOff"
+    static let defaultUpgradeServer = "http://100.70.57.3:8787"
+
+    static var upgradeEnabled: Bool { !UserDefaults.standard.bool(forKey: upgradeOff) }
+    static var upgradeURL: URL? {
+        let s = UserDefaults.standard.string(forKey: upgradeServer)?.trimmingCharacters(in: .whitespaces)
+        return URL(string: (s?.isEmpty == false ? s! : defaultUpgradeServer))
+    }
 }
 
 /// Headset adjustments shown in Settings. The keys are the headset
@@ -45,6 +56,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage(AppSettings.onboarded) private var onboarded = true
     @AppStorage(AppSettings.mockMode) private var mockMode = false
+    @AppStorage(AppSettings.upgradeOff) private var upgradeOff = false
+    @AppStorage(AppSettings.upgradeServer) private var upgradeServer = ""
     @AppStorage(AppSettings.speechPause) private var pause = SpeechListener.defaultPause
     @ObservedObject private var live = LiveSpeech.shared
     @State private var savedKey = Keychain.apiKey
@@ -131,6 +144,14 @@ struct SettingsView: View {
         Section {
             Toggle("Sample AI", isOn: $mockMode)
                 .onChange(of: mockMode) { _, _ in model.refreshKey() }
+            Toggle("Refine drawings on the Mac", isOn: Binding(get: { !upgradeOff }, set: { upgradeOff = !$0 }))
+            if !upgradeOff {
+                TextField(AppSettings.defaultUpgradeServer, text: $upgradeServer)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .font(.callout.monospaced())
+            }
         } footer: {
             Text(savedKey == nil
                  ? "With no key saved, a sample AI draws a flower so you can try everything without API calls."
