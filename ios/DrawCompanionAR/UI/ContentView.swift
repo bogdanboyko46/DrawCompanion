@@ -151,8 +151,11 @@ struct PhoneOverlay: View {
             return Issue(icon: "wifi.slash", text: model.usingMock ? "You're offline. The sample AI still works." : "You're offline. Outlines need an internet connection.", fix: nil, action: nil)
         }
         if let problem = model.problem {
-            if problem.localizedCaseInsensitiveContains("key was rejected") {
-                return Issue(icon: "key", text: "Your Claude API key was rejected.", fix: "Fix key", action: .appSettings)
+            if problem.localizedCaseInsensitiveContains("key was rejected") || problem.localizedCaseInsensitiveContains("check it in settings") {
+                return Issue(icon: "key", text: "Claude didn't accept your API key.", fix: "Fix key", action: .appSettings)
+            }
+            if problem.localizedCaseInsensitiveContains("out of credit") {
+                return Issue(icon: "creditcard", text: "Your Claude account is out of credit. Add some at console.anthropic.com, or use the sample AI.", fix: "Settings", action: .appSettings)
             }
             if problem.localizedCaseInsensitiveContains("speech recognition") {
                 return Issue(icon: "waveform.slash", text: "Speech recognition isn't available right now. Typing still works.", fix: "Retry", action: .retryMic)
@@ -161,7 +164,8 @@ struct PhoneOverlay: View {
                 || problem.localizedCaseInsensitiveContains("timed out") || problem.localizedCaseInsensitiveContains("network") {
                 return Issue(icon: "wifi.exclamationmark", text: "Couldn't reach Claude. Check your connection and say it again.", fix: nil, action: nil)
             }
-            if problem.localizedCaseInsensitiveContains("busy") {
+            if problem.localizedCaseInsensitiveContains("busy") || problem.localizedCaseInsensitiveContains("overloaded")
+                || problem.localizedCaseInsensitiveContains("too many requests") {
                 return Issue(icon: "hourglass", text: "Claude is busy. Say it again in a moment.", fix: nil, action: nil)
             }
             return Issue(icon: "exclamationmark.triangle", text: problem, fix: nil, action: nil)

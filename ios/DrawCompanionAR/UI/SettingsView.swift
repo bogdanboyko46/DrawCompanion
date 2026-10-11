@@ -10,8 +10,10 @@ enum AppSettings {
     static let speechPause = SpeechListener.pauseKey
 }
 
-/// Headset adjustments shown in Settings. The headset renderer reads these
-/// keys from UserDefaults; to add one, add a line to `all`.
+/// Headset adjustments shown in Settings. The keys are the headset
+/// renderer's (`HeadsetOptics.Key` in Core/HeadsetOptics.swift), which
+/// re-reads them while running; defaults match `HeadsetOptics()` (Cardboard
+/// v1). To add one, add a line to `all`.
 struct HeadsetOption: Identifiable {
     let key: String
     let title: String
@@ -21,14 +23,20 @@ struct HeadsetOption: Identifiable {
     let format: (Double) -> String
     var id: String { key }
 
+    static let distortionKey = "headset.correctsDistortion"
+
     static let all: [HeadsetOption] = [
-        HeadsetOption(key: "headset.zoom", title: "Zoom", range: 1.0...2.5, step: 0.05, defaultValue: 1.6) { String(format: "%.2f×", $0) },
-        HeadsetOption(key: "headset.eyeOffset", title: "Eye spacing", range: -8...8, step: 0.5, defaultValue: 0) { String(format: "%+.1f mm", $0) },
-        HeadsetOption(key: "headset.k1", title: "Lens correction", range: 0...0.8, step: 0.01, defaultValue: 0.441) { String(format: "%.2f", $0) },
+        HeadsetOption(key: "headset.zoom", title: "Zoom", range: 0.6...2.5, step: 0.05, defaultValue: 1.1) { String(format: "%.2f×", $0) },
+        HeadsetOption(key: "headset.lensSeparationMM", title: "Lens spacing", range: 50...72, step: 0.5, defaultValue: 60) { String(format: "%.1f mm", $0) },
+        HeadsetOption(key: "headset.verticalOffsetMM", title: "Height of the picture", range: -12...12, step: 0.5, defaultValue: 0) { String(format: "%+.1f mm", $0) },
+        HeadsetOption(key: "headset.fieldOfViewDegrees", title: "Field of view", range: 25...55, step: 1, defaultValue: 40) { String(format: "%.0f°", $0) },
+        HeadsetOption(key: "headset.k1", title: "Lens correction", range: 0...1, step: 0.01, defaultValue: 0.441) { String(format: "%.2f", $0) },
+        HeadsetOption(key: "headset.k2", title: "Lens correction (edges)", range: 0...0.6, step: 0.01, defaultValue: 0.156) { String(format: "%.2f", $0) },
+        HeadsetOption(key: "headset.screenToLensMM", title: "Screen to lens", range: 30...60, step: 0.5, defaultValue: 42) { String(format: "%.1f mm", $0) },
     ]
 
     func value(_ defaults: UserDefaults = .standard) -> Double {
-        defaults.object(forKey: key) as? Double ?? defaultValue
+        (defaults.object(forKey: key) as? NSNumber)?.doubleValue ?? defaultValue
     }
 }
 
@@ -44,6 +52,7 @@ struct SettingsView: View {
     @State private var checking = false
     @State private var check: APIKeyCheck.Result?
     @State private var headset: [String: Double] = Dictionary(uniqueKeysWithValues: HeadsetOption.all.map { ($0.key, $0.value()) })
+    @State private var correctsDistortion = UserDefaults.standard.object(forKey: HeadsetOption.distortionKey) as? Bool ?? true
 
     var body: some View {
         NavigationStack {
@@ -162,6 +171,8 @@ struct SettingsView: View {
 
     private var headsetSection: some View {
         Section {
+            Toggle("Correct lens distortion", isOn: $correctsDistortion)
+                .onChange(of: correctsDistortion) { _, on in UserDefaults.standard.set(on, forKey: HeadsetOption.distortionKey) }
             ForEach(HeadsetOption.all) { option in
                 VStack(alignment: .leading) {
                     HStack {
@@ -178,11 +189,13 @@ struct SettingsView: View {
                     UserDefaults.standard.removeObject(forKey: option.key)
                     headset[option.key] = option.defaultValue
                 }
+                UserDefaults.standard.removeObject(forKey: HeadsetOption.distortionKey)
+                correctsDistortion = true
             }
         } header: {
             Text("Headset")
         } footer: {
-            Text("Adjust so the page looks sharp and straight through your viewer's lenses.")
+            Text("Defaults suit Cardboard-style viewers. Adjust while looking through yours: lens spacing until the two pictures merge, lens correction until the paper's edges look straight, zoom until the page looks life-size.")
         }
     }
 
