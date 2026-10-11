@@ -34,6 +34,15 @@ final class CompletionTests: XCTestCase {
         XCTAssertTrue(t.update(traced, now: 3.9).done)
     }
 
+    func testOneStrayMarkOnTheOutlineIsNotTracing() {
+        // A short smudge (a shadow edge, a few pixels of misalignment) touching
+        // one spot of the outline must not start the 3-second countdown.
+        let t = tracker()
+        let smudge = ink(blank(), 99, 101, 101)
+        XCTAssertFalse(feed(t, smudge, [0, 0.4, 0.8, 1.2]).started)
+        XCTAssertFalse(feed(t, smudge, [5, 10]).done)
+    }
+
     func testWaitsUntilTracingStarts() {
         XCTAssertFalse(feed(tracker(), blank(), [0, 5, 20]).done)
     }
