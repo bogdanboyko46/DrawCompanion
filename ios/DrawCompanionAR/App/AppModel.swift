@@ -313,7 +313,8 @@ final class AppModel: ObservableObject {
     private func startUpgrade(page: Data, paper: PaperSize, said: [String], box: PaperRect) {
         upgradeTask?.cancel()
         refining = false
-        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase ?? AppSettings.upgradeURL, let key = Keychain.apiKey else { return }
+        // Only when a server answered: otherwise the draft would sit dimmed until a timeout.
+        guard !usingMock, AppSettings.upgradeEnabled, let url = upgradeBase, let key = Keychain.apiKey else { return }
         let turn = turnID
         upgradeTurn = turn
         let id = String(format: "%04d", turnID)
@@ -647,6 +648,17 @@ final class AppModel: ObservableObject {
     /// with the outline drawn where the screen draws it (same projection).
     private func debugTick(_ now: TimeInterval) {
         if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            // Documents/server.txt: the drawing server's address (e.g. a tunnel
+            // when the Wi-Fi keeps the phone and the Mac apart). Saved in Settings.
+            let server = dir.appendingPathComponent("server.txt")
+            if let text = try? String(contentsOf: server, encoding: .utf8) {
+                try? FileManager.default.removeItem(at: server)
+                let address = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                print("[DC] debug server: \(address)")
+                UserDefaults.standard.set(address, forKey: AppSettings.upgradeServer)
+                upgradeBase = nil
+                checkUpgradeServer()
+            }
             let say = dir.appendingPathComponent("say.txt")
             if let text = try? String(contentsOf: say, encoding: .utf8) {
                 try? FileManager.default.removeItem(at: say)

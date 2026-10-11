@@ -2,6 +2,23 @@
 
 An AR drawing assistant. You draw on real paper wearing a lightweight headset (your phone in a head-mounted viewer). The microphone is always on: just talk ("I'm stuck, maybe a cat on the windowsill?"). The AI never talks back. It draws an outline on your paper wherever it fits best, changes it when you say so ("bigger, facing left"), clears it when asked, and ignores everything else you say. Once you stop drawing on the outline for 3 seconds, it clears.
 
+**Try it in a minute** (iPhone app, see [ios/README.md](ios/README.md) to install):
+
+1. Put a sheet with a drawing on a desk. Hold the phone about 40 cm above it so the whole page is in view for a second. The status at the top left goes from "Show the whole page…" / "Move back…" to **Listening**.
+2. Just talk. Nothing to press:
+
+   | Say | What happens |
+   |---|---|
+   | "Draw a soccer ball at his foot" | An outline appears in 3-6 s, placed by the AI next to the foot |
+   | "Make it bigger" / "move it to the left" | The outline changes |
+   | "Clear it" | It goes away |
+   | "Oh my God, it works" (or any chatter) | Nothing: it's ignored |
+
+3. Trace it. Once you've traced part of it and then left it alone for 3 seconds, it fades away.
+4. Wave an open hand at the camera to turn the mic off (a big mic symbol flashes). Wave again to turn it back on. Press and hold anywhere for Settings.
+
+What makes it work: the page is found with Vision and pinned in 3D (on dark or glossy desks, its height comes from the LiDAR depth sensor); while you draw, the app compares the camera image with the photo the AI drew on and keeps the outline on your actual pencil lines to within a few millimeters, gliding to each correction instead of jumping.
+
 Design, decisions and remaining risks: **[docs/DESIGN.md](docs/DESIGN.md)**.
 
 ## Two ways to run it
