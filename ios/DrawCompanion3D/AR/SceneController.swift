@@ -284,16 +284,24 @@ final class SceneController: NSObject, ARSessionDelegate {
         return m
     }
 
-    /// True if there's real surface under `point` at about the same height.
+    /// True if there's real surface under `point` at about the same height,
+    /// a little way in from the desk's edge all around (ARKit maps the desk as
+    /// detected plane geometry, growing as you look around).
     private func isOnSurface(_ point: SIMD3<Float>, origin: SIMD3<Float>) -> Bool {
-        let level = origin.y
-        let query = ARRaycastQuery(origin: point + [0, 0.15, 0], direction: [0, -1, 0],
-                                   allowing: .existingPlaneGeometry, alignment: .horizontal)
-        guard let hit = arView.session.raycast(query).first else {
-            // No plane geometry here (yet): only allow short trips from where it was born.
-            return simd_distance(SIMD2(point.x, point.z), SIMD2(origin.x, origin.z)) < 0.25
+        let margin: Float = 0.035
+        let probes: [SIMD3<Float>] = [[0, 0, 0], [margin, 0, 0], [-margin, 0, 0], [0, 0, margin], [0, 0, -margin]]
+        var mapped = 0
+        for offset in probes {
+            let query = ARRaycastQuery(origin: point + offset + [0, 0.15, 0], direction: [0, -1, 0],
+                                       allowing: .existingPlaneGeometry, alignment: .horizontal)
+            guard let hit = arView.session.raycast(query).first else { continue }
+            // A different level (the floor below, a shelf above) is off the desk.
+            guard abs(hit.worldTransform.columns.3.y - origin.y) < 0.04 else { return false }
+            mapped += 1
         }
-        return abs(hit.worldTransform.columns.3.y - level) < 0.04
+        if mapped == probes.count { return true }
+        // Not mapped here (yet): only short trips from where it was born.
+        return mapped == 0 && simd_distance(SIMD2(point.x, point.z), SIMD2(origin.x, origin.z)) < 0.12
     }
 
     // MARK: Input

@@ -120,7 +120,6 @@ final class AppModel {
         scene.beginPortal(for: captured)
         print("[make] portal shown; creating job")
         phase = .making
-        bringCompanion()
 
         do {
             let job = try await backend.create(jpeg: captured.figureJPEG ?? captured.jpeg, hint: hint)
@@ -215,17 +214,6 @@ final class AppModel {
         hint = ""
         refreshLibrary()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-    }
-
-    /// While a new character is being made, the most recent saved one keeps
-    /// you company beside the frame (if nobody is in the room already).
-    private func bringCompanion() {
-        guard scene.actors.isEmpty, let saved = local.all().first else { return }
-        Task {
-            if let companion = try? await scene.placeBeside(job: saved, modelURL: local.modelURL(saved.id)) {
-                print("[make] companion: \(companion.name)")
-            }
-        }
     }
 
     /// Brings the waiting character out of the paper; whoever was keeping you

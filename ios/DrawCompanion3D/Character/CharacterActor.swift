@@ -33,6 +33,7 @@ final class CharacterActor {
     private enum State { case appearing, idle, walking, performing(String) }
     private var state: State = .appearing
     private var target: SIMD3<Float>?
+    private var lastEdgeCheck: TimeInterval = 0
     private var time: TimeInterval = 0
     private var nextDecision: TimeInterval = 3
     private var performUntil: TimeInterval = 0
@@ -213,6 +214,7 @@ final class CharacterActor {
     }
 
     /// Walk to a world point on the surface.
+    /// (Stops short at the desk's edge: see the walking step.)
     func walk(toWorld point: SIMD3<Float>) {
         var p = anchor.convert(position: point, from: nil)
         p.y = 0
@@ -290,7 +292,18 @@ final class CharacterActor {
                 // Turn first, then walk: no moonwalking.
                 if abs(angleDifference(yaw, desiredYaw)) < 0.7 {
                     let step = min(distance, walkSpeed * Float(dt))
-                    root.position += SIMD3(d.x / distance * step, 0, d.y / distance * step)
+                    let dir = SIMD3(d.x / distance, 0, d.y / distance)
+                    // Look a foot ahead for the edge of the desk (a few times a second).
+                    if time - lastEdgeCheck > 0.12 {
+                        lastEdgeCheck = time
+                        let ahead = anchor.convert(position: pos + dir * max(0.03, height * 0.2), to: nil)
+                        if !(isWalkable?(ahead) ?? true) {
+                            self.target = nil
+                            enterIdle()
+                            break
+                        }
+                    }
+                    root.position += dir * step
                 }
             }
         }
