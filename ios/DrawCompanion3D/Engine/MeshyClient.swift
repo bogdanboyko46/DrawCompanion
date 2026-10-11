@@ -65,7 +65,7 @@ struct MeshyClient {
                 throw MeshyError(message: "Meshy \(task.status.lowercased()): \(task.task_error?.message ?? "no details")")
             default:
                 if Date() > deadline { throw MeshyError(message: "Meshy took too long.", retryable: true) }
-                try await _Concurrency.Task.sleep(for: .seconds(3))
+                try await _Concurrency.Task.sleep(for: .seconds(1.5))
             }
         }
     }

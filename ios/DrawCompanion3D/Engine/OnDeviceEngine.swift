@@ -147,95 +147,107 @@ actor OnDeviceEngine: CharacterBackend {
             guard var w = work[id] else { return }
             let drawingURI = "data:image/jpeg;base64," + w.jpeg.base64EncodedString()
 
-            // 1. Claude reads the drawing while Meshy is already painting the
-            //    concept from the drawing itself: neither waits for the other.
+            // The critical path is Meshy only: paint the concept, then build the 3D
+            // model from it. Everything Claude does runs alongside and never holds
+            // it up: reading the drawing gives the name, greeting and personality;
+            // checking the concept picks which view to show as the front.
             enter(id, .read)
             let jpeg = w.jpeg, hint = w.hint
             let reading: Task<ClaudeDirector.Sheet, Error>? = w.sheet == nil
                 ? Task { try await director.readDrawing(jpeg: jpeg, hint: hint) } : nil
 
-            // 2. Paint a clean concept: front, side and back views of the same design.
-            func paint(_ prompt: String) async throws {
+            // 1. Paint a clean concept: front, side and back views of the same design.
+            enter(id, .concept)
+            if w.conceptTask == nil || !w.done.contains(.concept) {
                 let task = try await meshy.create(.imageToImage, body: [
                     "ai_model": imageModel,
-                    "prompt": prompt,
+                    "prompt": Self.conceptPrompt(hint: hint),
                     "reference_image_urls": [drawingURI],
                     "generate_multi_view": true,
                 ])
                 w.conceptTask = task
                 work[id] = w
-                let done = try await meshy.wait(.imageToImage, task) { p in await self.progress(id, p) }
-                let urls = done.image_urls ?? []
-                guard !urls.isEmpty else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
-                w.conceptViews = urls.count
-                var files: [String] = []
-                for (i, url) in urls.enumerated() {
-                    let file = folder.appending(path: "view-\(i).png")
-                    try await meshy.download(url, to: file)
-                    files.append(file.absoluteString)
-                }
-                jobs[id]?.conceptViews = files
-                // Until the check says which view is the front, guess the middle one.
-                showView(id, urls.count > 2 ? 1 : 0)
             }
-            if !w.done.contains(.concept) {
-                enter(id, .concept)
-                try await paint(Self.conceptPrompt(hint: hint))
-                w.done.insert(.concept)
-                work[id] = w
-            }
-
-            if let reading {
-                let sheet = try await reading.value
-                guard sheet.is_character else {
-                    throw CharacterAPI.ServerError(message: sheet.reject_reason.isEmpty
-                        ? "That doesn't look like a character yet. Try drawing a figure." : sheet.reject_reason)
-                }
-                w.sheet = sheet
-                work[id] = w
-                jobs[id]?.character = CharacterInfo(
-                    name: sheet.name, summary: sheet.summary, greeting: sheet.greeting, bodyPlan: sheet.body_plan,
-                    heightMeters: sheet.height_m, figureBox: sheet.figure_box, colors: sheet.colors,
-                    personality: sheet.personality)
-            }
-            w.done.insert(.read)
+            let concept = try await meshy.wait(.imageToImage, w.conceptTask!) { p in await self.progress(id, p) }
+            let urls = concept.image_urls ?? []
+            guard !urls.isEmpty else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
+            w.conceptViews = urls.count
+            w.done.insert(.concept)
             work[id] = w
-            guard let sheet = w.sheet else { return }
 
-            // 3. Claude picks the front view for the reveal, alongside the build.
-            if !w.reviewed {
-                w.reviewed = true
-                work[id] = w
-                let views = (0..<max(1, w.conceptViews)).compactMap { i -> (data: Data, type: String)? in
-                    guard let d = try? Data(contentsOf: folder.appending(path: "view-\(i).png")) else { return nil }
-                    return (d, Self.imageType(d))
-                }
-                if views.count > 1 {
-                    Task {
-                        if let review = try? await director.reviewConcept(drawing: jpeg, views: views, sheet: sheet) {
-                            self.showView(id, review.front_index)
-                        }
-                    }
-                }
-            }
-
-            // 4. Sculpt the textured 3D model from the concept views.
+            // 2. Start the 3D build right away; it only needs the concept's id.
             enter(id, .sculpt)
-            let endpoint: MeshyClient.Endpoint = w.conceptViews > 1 ? .multiImageTo3d : .imageTo3d
+            let endpoint: MeshyClient.Endpoint = urls.count > 1 ? .multiImageTo3d : .imageTo3d
             if w.sculptTask == nil {
                 var body: [String: Any] = [
                     "ai_model": meshModel,
                     "should_texture": true,
                     "enable_pbr": false,
                     "should_remesh": false,
-                    "texture_prompt": sheet.texture_prompt,
                     "target_formats": ["usdz"],
+                    "input_task_id": w.conceptTask!,
                 ]
-                if let concept = w.conceptTask { body["input_task_id"] = concept } else { body["image_url"] = drawingURI }
+                if let texture = w.sheet?.texture_prompt, !texture.isEmpty { body["texture_prompt"] = texture }
                 w.sculptTask = try await meshy.create(endpoint, body: body)
                 work[id] = w
             }
-            let sculpt = try await meshy.wait(endpoint, w.sculptTask!) { p in await self.progress(id, p) }
+            let sculptTask = w.sculptTask!
+
+            // 3. While it builds: fetch the views for the reveal, and finish reading.
+            let files = await withTaskGroup(of: (Int, String?).self) { group in
+                for (i, url) in urls.enumerated() {
+                    group.addTask {
+                        let file = folder.appending(path: "view-\(i).png")
+                        return (i, (try? await meshy.download(url, to: file)) != nil ? file.absoluteString : nil)
+                    }
+                }
+                var out = [String?](repeating: nil, count: urls.count)
+                for await (i, f) in group { out[i] = f }
+                return out.compactMap { $0 }
+            }
+            jobs[id]?.conceptViews = files
+            showView(id, urls.count > 2 ? 1 : 0) // a guess until the check picks the front
+
+            if let reading {
+                do {
+                    let sheet = try await reading.value
+                    guard sheet.is_character else {
+                        throw CharacterAPI.ServerError(message: sheet.reject_reason.isEmpty
+                            ? "That doesn't look like a character yet. Try drawing a figure." : sheet.reject_reason)
+                    }
+                    w.sheet = sheet
+                } catch let error as CharacterAPI.ServerError {
+                    throw error
+                } catch {
+                    // Claude unreachable: the model is still coming, so carry on with defaults.
+                    print("[engine] \(id) reading failed, using defaults: \(error.localizedDescription)")
+                }
+                work[id] = w
+            }
+            w.done.insert(.read)
+            work[id] = w
+            if let sheet = w.sheet {
+                jobs[id]?.character = CharacterInfo(
+                    name: sheet.name, summary: sheet.summary, greeting: sheet.greeting, bodyPlan: sheet.body_plan,
+                    heightMeters: sheet.height_m, figureBox: sheet.figure_box, colors: sheet.colors,
+                    personality: sheet.personality)
+            }
+
+            if !w.reviewed, let sheet = w.sheet, files.count > 1 {
+                w.reviewed = true
+                work[id] = w
+                let views = (0..<urls.count).compactMap { i -> (data: Data, type: String)? in
+                    guard let d = try? Data(contentsOf: folder.appending(path: "view-\(i).png")) else { return nil }
+                    return (d, Self.imageType(d))
+                }
+                Task {
+                    if let review = try? await director.reviewConcept(drawing: jpeg, views: views, sheet: sheet) {
+                        self.showView(id, review.front_index)
+                    }
+                }
+            }
+
+            let sculpt = try await meshy.wait(endpoint, sculptTask) { p in await self.progress(id, p) }
             w.done.insert(.sculpt)
             work[id] = w
 
@@ -255,7 +267,7 @@ actor OnDeviceEngine: CharacterBackend {
             }
             job.status = .ready
             job.stage = "done"
-            job.message = "\(sheet.name) is ready"
+            job.message = "\(w.sheet?.name ?? "Your character") is ready"
             job.progress = 1
             job.stageProgress = 1
             jobs[id] = job
