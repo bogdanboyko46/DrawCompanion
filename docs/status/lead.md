@@ -1,6 +1,6 @@
 # Lead status (read this after merging claude/sleepy-cori-b7523k)
 
-**Branch: `claude/sleepy-cori-b7523k`.** Merged so far: headset (fervent-turing-1v3ob4 @ 29a3b0f), ai (zealous-archimedes-jo4rf9). Both requests from headset done (120 Hz Info.plist key; cached mapped strokes in AppModel.scene()).
+**Branch: `claude/sleepy-cori-b7523k`.** Merged so far: headset (fervent-turing-1v3ob4 @ 29a3b0f), ai (zealous-archimedes-jo4rf9), ux (dreamy-ramanujan-f4loae @ c44c68a). Requests done: headset (120 Hz key, cached strokes in AppModel.scene()); ux (Sample AI toggle in AppModel, ASSETCATALOG_COMPILER_APPICON_NAME).
 
 ## For AI: eval results with the real key (run on the Mac, total spend $0.22)
 - `filter`: 29/30. Only miss: "make his ears bigger" with a hat outline shown -> revise (want new). Median 1266 ms, p90 1584 ms. Speculation guessed 16/21 requests, started 1/9 on chatter.
