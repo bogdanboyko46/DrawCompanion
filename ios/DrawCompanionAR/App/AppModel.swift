@@ -20,6 +20,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var usingMock = true
     /// A nicer version of the new outline is being drawn on the Mac.
     @Published private(set) var refining = false
+    /// Bumped on each wave, so the view can flash the mic's new state.
+    @Published private(set) var waves = 0
 
     let ar = ARController()
     private let speech = SpeechListener()
@@ -93,6 +95,12 @@ final class AppModel: ObservableObject {
             }
         }
         refreshKey()
+        // Fully hands-free: wave an open hand at the camera to turn the mic off or on.
+        ar.onWave = { [weak self] in
+            guard let self else { return }
+            self.toggleListening()
+            self.waves += 1
+        }
     }
 
     func start() {

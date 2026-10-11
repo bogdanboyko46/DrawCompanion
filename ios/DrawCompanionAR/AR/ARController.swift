@@ -30,6 +30,18 @@ final class ARController: NSObject, ARSessionDelegate {
     private(set) var trackingNormal = false
 
     private let visionQueue = DispatchQueue(label: "drawcompanion.page-detect", qos: .userInitiated)
+
+    /// Called on the main queue when an open hand waves in front of the camera.
+    var onWave: (() -> Void)?
+    private let handQueue = DispatchQueue(label: "drawcompanion.hand", qos: .userInitiated)
+    private var handBusy = false
+    private var lastHand: TimeInterval = 0
+    private var wave = WaveDetector()
+
+    /// Why the page wasn't found, counted and logged every few seconds while
+    /// it's missing (so "Looking for paper" can be diagnosed from the log).
+    private var misses: [String: Int] = [:]
+    private var lastMissLog: TimeInterval = 0
     private var detecting = false
     private var lastDetectStart: TimeInterval = 0
     private let detectInterval: TimeInterval = 0.4
@@ -53,6 +65,11 @@ final class ARController: NSObject, ARSessionDelegate {
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.personSegmentation) {
             config.frameSemantics.insert(.personSegmentation)
         }
+        // LiDAR depth: finds the paper's distance even before ARKit has mapped
+        // the desk (dark, glossy or plain desks can take a long time).
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(config.frameSemantics.union(.sceneDepth)) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
         // The sharpest 4:3 format: the page photo sent to the AI comes from this image.
         if let format = ARWorldTrackingConfiguration.supportedVideoFormats
             .filter({ abs($0.imageResolution.width / $0.imageResolution.height - 4.0 / 3.0) < 0.01 })
@@ -69,6 +86,7 @@ final class ARController: NSObject, ARSessionDelegate {
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         if case .normal = frame.camera.trackingState { trackingNormal = true } else { trackingNormal = false }
+        watchForWave(frame)
         guard !detecting, frame.timestamp - lastDetectStart >= detectInterval else { return }
         detecting = true
         lastDetectStart = frame.timestamp
@@ -78,7 +96,10 @@ final class ARController: NSObject, ARSessionDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.detecting = false
-                if let found { self.place(found, using: frame) }
+                switch found {
+                case let .success(corners): self.place(corners, using: frame)
+                case let .failure(miss): self.miss(miss.rawValue, frame)
+                }
             }
         }
     }
@@ -87,28 +108,94 @@ final class ARController: NSObject, ARSessionDelegate {
 
     /// Page corners in normalized image coordinates (origin top-left),
     /// ordered top-left, top-right, bottom-right, bottom-left.
-    static func detectPage(in pixelBuffer: CVPixelBuffer) -> [CGPoint]? {
+    enum Miss: String, Error { case noPage = "no page seen", lowConfidence = "page unsure", cutOff = "page cut off by the view edge", odd = "odd corners" }
+
+    static func detectPage(in pixelBuffer: CVPixelBuffer) -> Result<[CGPoint], Miss> {
         let request = VNDetectDocumentSegmentationRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
-        guard (try? handler.perform([request])) != nil,
-              let obs = request.results?.first, obs.confidence > 0.6 else { return nil }
+        guard (try? handler.perform([request])) != nil, let obs = request.results?.first else { return .failure(.noPage) }
+        // Two detections must still agree before the page is pinned, so a
+        // less sure one is fine (hands on the paper lower the confidence).
+        guard obs.confidence > 0.5 else { return .failure(.lowConfidence) }
         // Vision's origin is bottom-left; flip to top-left.
         let pts = [obs.topLeft, obs.topRight, obs.bottomRight, obs.bottomLeft].map { CGPoint(x: $0.x, y: 1 - $0.y) }
         // A corner on the image border means the page is cut off: its "corner" is
         // really the edge of the view, and the page would come out the wrong shape.
         let margin = 0.015
-        guard pts.allSatisfy({ $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }) else { return nil }
+        guard pts.allSatisfy({ $0.x > margin && $0.x < 1 - margin && $0.y > margin && $0.y < 1 - margin }) else { return .failure(.cutOff) }
         let tl = pts.min { $0.x + $0.y < $1.x + $1.y }!
         let br = pts.max { $0.x + $0.y < $1.x + $1.y }!
         let tr = pts.max { $0.x - $0.y < $1.x - $1.y }!
         let bl = pts.min { $0.x - $0.y < $1.x - $1.y }!
         let ordered = [tl, tr, br, bl]
-        return Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 ? ordered : nil
+        return Set(ordered.map { "\($0.x),\($0.y)" }).count == 4 ? .success(ordered) : .failure(.odd)
+    }
+
+    private func miss(_ why: String, _ frame: ARFrame) {
+        guard corners == nil else { return }
+        misses[why, default: 0] += 1
+        if frame.timestamp - lastMissLog > 3 {
+            lastMissLog = frame.timestamp
+            print("[DC] page: not found yet \(misses.sorted { $0.key < $1.key }.map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")); tracking \(frame.camera.trackingState)")
+            misses = [:]
+            // What the camera sees, for diagnosing from the Mac (Documents/view.jpg).
+            let image = CIImage(cvPixelBuffer: frame.capturedImage)
+            visionQueue.async {
+                let small = image.transformed(by: CGAffineTransform(scaleX: 0.4, y: 0.4))
+                guard let cg = CIContext().createCGImage(small, from: small.extent),
+                      let data = UIImage(cgImage: cg).jpegData(compressionQuality: 0.7),
+                      let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+                try? data.write(to: dir.appendingPathComponent("view.jpg"))
+            }
+        }
+    }
+
+    // MARK: wave to mute
+
+    /// Ten times a second, looks for an open hand and where it is across the view.
+    private func watchForWave(_ frame: ARFrame) {
+        guard onWave != nil, !handBusy, frame.timestamp - lastHand >= 0.1 else { return }
+        handBusy = true
+        lastHand = frame.timestamp
+        let pixelBuffer = frame.capturedImage
+        let t = frame.timestamp
+        handQueue.async { [weak self] in
+            let x = Self.openHandX(in: pixelBuffer)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.handBusy = false
+                if self.wave.update(x: x, at: t) {
+                    print("[DC] wave")
+                    self.onWave?()
+                }
+            }
+        }
+    }
+
+    /// Horizontal position (0–1) of an open hand, or nil if none: fingers
+    /// spread out from the wrist, unlike a hand holding a pencil.
+    nonisolated static func openHandX(in pixelBuffer: CVPixelBuffer) -> Double? {
+        let request = VNDetectHumanHandPoseRequest()
+        request.maximumHandCount = 1
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up)
+        guard (try? handler.perform([request])) != nil, let hand = request.results?.first,
+              let points = try? hand.recognizedPoints(.all),
+              let wrist = points[.wrist], wrist.confidence > 0.3,
+              let knuckle = points[.middleMCP], knuckle.confidence > 0.3 else { return nil }
+        let palm = hypot(knuckle.location.x - wrist.location.x, knuckle.location.y - wrist.location.y)
+        guard palm > 0.02 else { return nil }
+        let tips: [VNHumanHandPoseObservation.JointName] = [.thumbTip, .indexTip, .middleTip, .ringTip, .littleTip]
+        let extended = tips.filter { name in
+            guard let tip = points[name], tip.confidence > 0.3 else { return false }
+            return hypot(tip.location.x - wrist.location.x, tip.location.y - wrist.location.y) > palm * 1.6
+        }.count
+        return extended >= 4 ? Double(wrist.location.x) : nil
     }
 
     private func place(_ imageCorners: [CGPoint], using frame: ARFrame) {
         let hits = imageCorners.compactMap { raycast($0, frame) }
-        guard hits.count == 4, var next = Self.fitRectangle(hits) else { return }
+        guard hits.count == 4 else { return miss("desk surface not found under the corners", frame) }
+        guard var next = Self.fitRectangle(hits) else { return miss("not paper-sized", frame) }
         if let old = corners {
             // Keep corner identity (which edge is "top") when the paper moves or turns.
             next = (0..<4).map { k in (0..<4).map { next[($0 + k) % 4] } }.min { Self.spread($0, old) < Self.spread($1, old) }!
@@ -172,7 +259,40 @@ final class ARController: NSObject, ARSessionDelegate {
                 return SIMD3(t.x, t.y, t.z)
             }
         }
-        return nil
+        guard let p = Self.depthPoint(point, frame) else { return nil }
+        if !loggedDepthCheck, let back = Self.project(p, camera: frame.camera) {
+            // One-time sanity check: the depth point must land back where it came from.
+            loggedDepthCheck = true
+            let res = frame.camera.imageResolution
+            print(String(format: "[DC] page: using LiDAR depth; check %.1f px off", hypot(back.x - point.x * res.width, back.y - point.y * res.height)))
+        }
+        return p
+    }
+    private var loggedDepthCheck = false
+
+    /// World position of an image point (normalized, origin top-left) from the
+    /// LiDAR depth map: the median depth around it, unprojected through the camera.
+    static func depthPoint(_ point: CGPoint, _ frame: ARFrame) -> SIMD3<Float>? {
+        guard let depth = frame.sceneDepth?.depthMap else { return nil }
+        CVPixelBufferLockBaseAddress(depth, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depth, .readOnly) }
+        let w = CVPixelBufferGetWidth(depth), h = CVPixelBufferGetHeight(depth)
+        let rowBytes = CVPixelBufferGetBytesPerRow(depth)
+        guard let base = CVPixelBufferGetBaseAddress(depth) else { return nil }
+        let cx = Int(point.x * CGFloat(w)), cy = Int(point.y * CGFloat(h))
+        var values: [Float] = []
+        for y in max(0, cy - 2)...min(h - 1, cy + 2) {
+            let row = base.advanced(by: y * rowBytes).assumingMemoryBound(to: Float32.self)
+            for x in max(0, cx - 2)...min(w - 1, cx + 2) where row[x].isFinite && row[x] > 0.05 { values.append(row[x]) }
+        }
+        guard values.count >= 5 else { return nil }
+        let d = values.sorted()[values.count / 2]
+        // Camera space: x right, y up, looking down -z. Intrinsics are in captured-image pixels.
+        let k = frame.camera.intrinsics, res = frame.camera.imageResolution
+        let u = Float(point.x * res.width), v = Float(point.y * res.height)
+        let local = SIMD4<Float>((u - k[2][0]) / k[0][0] * d, -(v - k[2][1]) / k[1][1] * d, -d, 1)
+        let world = frame.camera.transform * local
+        return SIMD3(world.x, world.y, world.z)
     }
 
     /// Largest distance between matching corners.

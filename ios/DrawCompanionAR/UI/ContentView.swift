@@ -44,28 +44,15 @@ struct PhoneOverlay: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var live = LiveSpeech.shared
     @ObservedObject private var network = Connectivity.shared
-    @State private var typed = ""
     @State private var showSettings = false
-    @FocusState private var typing: Bool
 
+    // Fully AR: nothing to press. You talk, wave to turn the mic off or on,
+    // and a long press anywhere opens Settings (setup only).
     var body: some View {
         VStack(spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 StatusPill(status: status)
-                if model.usingMock {
-                    Button { showSettings = true } label: {
-                        Label("Sample AI", systemImage: "wand.and.stars")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(ChipStyle())
-                    .accessibilityHint("Add your Claude API key in Settings for real outlines")
-                }
                 Spacer()
-                Button { showSettings = true } label: {
-                    Image(systemName: "gearshape.fill")
-                }
-                .buttonStyle(RoundIconStyle())
-                .accessibilityLabel("Settings")
             }
             if let issue {
                 IssueBanner(issue: issue) { fix(issue) }
@@ -73,63 +60,15 @@ struct PhoneOverlay: View {
             }
             Spacer()
             Transcript(partial: live.partial, last: model.lastHeard)
-            controls
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 1.0) { showSettings = true }
+        .overlay { MicFlash(on: model.listening, trigger: model.waves) }
         .animation(.easeOut(duration: 0.25), value: issue)
         .sheet(isPresented: $showSettings) { SettingsView() }
-    }
-
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Button { model.toggleListening() } label: {
-                Image(systemName: model.listening ? "mic.fill" : "mic.slash.fill")
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .buttonStyle(RoundIconStyle(tint: model.listening ? .green : nil))
-            .accessibilityLabel(model.listening ? "Stop listening" : "Start listening")
-
-            HStack {
-                TextField("Or type what you'd say…", text: $typed)
-                    .submitLabel(.send)
-                    .focused($typing)
-                    .onSubmit(send)
-                if !typed.isEmpty {
-                    Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.title3) }
-                        .accessibilityLabel("Send")
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 44)
-            .background(.ultraThinMaterial, in: Capsule())
-
-            if model.hasOutline {
-                Button { model.clearOutline() } label: {
-                    Image(systemName: "eye.slash")
-                }
-                .buttonStyle(RoundIconStyle())
-                .accessibilityLabel("Hide outline")
-                .transition(.scale.combined(with: .opacity))
-            }
-
-            if AppModel.headsetAvailable {
-            Button { typing = false; model.enterHeadset() } label: {
-                Label("Headset view", systemImage: "eyeglasses")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 16)
-                    .frame(height: 44)
-                    .background(Color.brand, in: Capsule())
-                    .foregroundStyle(.black)
-            }
-            }
-        }
-        .animation(.easeOut(duration: 0.2), value: model.hasOutline)
-    }
-
-    private func send() {
-        model.heard(typed)
-        typed = ""
     }
 
     // MARK: status
@@ -140,7 +79,7 @@ struct PhoneOverlay: View {
         if model.working { return .init(text: "Working on it", color: .brand, pulsing: true) }
         if model.refining { return .init(text: "Refining the drawing", color: .brand, pulsing: true) }
         if model.listening { return .init(text: "Listening", color: .green) }
-        return .init(text: "Mic off · tap the mic or type", color: .gray)
+        return .init(text: "Mic off · wave to turn it on", color: .gray)
     }
 
     private var issue: Issue? {
@@ -331,5 +270,30 @@ final class Connectivity: ObservableObject {
             }
         }
         monitor.start(queue: DispatchQueue(label: "drawcompanion.network"))
+    }
+}
+
+/// A big mic symbol that pops up for a moment after a wave, so you can see
+/// (through the headset) that the mic turned off or on.
+struct MicFlash: View {
+    let on: Bool
+    let trigger: Int
+    @State private var visible = false
+
+    var body: some View {
+        Image(systemName: on ? "mic.fill" : "mic.slash.fill")
+            .font(.system(size: 64, weight: .semibold))
+            .foregroundStyle(on ? Color.green : Color.white)
+            .padding(28)
+            .background(.ultraThinMaterial, in: Circle())
+            .opacity(visible ? 1 : 0)
+            .scaleEffect(visible ? 1 : 0.8)
+            .allowsHitTesting(false)
+            .onChange(of: trigger) { _, _ in
+                withAnimation(.spring(duration: 0.25)) { visible = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeOut(duration: 0.4)) { visible = false }
+                }
+            }
     }
 }
