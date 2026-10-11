@@ -65,7 +65,7 @@ final class DrawingAligner {
         guard reference.count == width * height else { return nil }
         self.width = width
         self.height = height
-        let ink = Self.inkMask(reference, width, height)
+        let ink = Self.lineMask(reference, width, height)
         referenceInk = ink.reduce(0) { $0 + ($1 ? 1 : 0) }
         guard referenceInk >= 60 else { return nil } // a blank page has nothing to lock onto
         distance = Self.distanceTransform(ink, width, height)
@@ -186,50 +186,77 @@ final class DrawingAligner {
 
     // MARK: image helpers
 
-    /// Ink: clearly darker than the paper around it (relative, so it works in dim light).
+    /// Ink: clearly darker than the paper right around it. Judged locally (a
+    /// 25×25 neighborhood), so a shadow across part of the page doesn't turn
+    /// that whole part, drawing included, into "ink".
     static func inkMask(_ gray: [Float], _ w: Int, _ h: Int) -> [Bool] {
-        var histogram = [Int](repeating: 0, count: 256)
-        for v in gray { histogram[min(255, max(0, Int(v)))] += 1 }
-        var seen = 0, paper: Float = 255
-        for (v, c) in histogram.enumerated() {
-            seen += c
-            if seen >= gray.count * 3 / 4 { paper = Float(v); break }
+        let W = w + 1
+        var sat = [Double](repeating: 0, count: W * (h + 1))
+        for y in 0..<h {
+            var row = 0.0
+            for x in 0..<w {
+                row += Double(gray[y * w + x])
+                sat[(y + 1) * W + x + 1] = sat[y * W + x + 1] + row
+            }
         }
-        let cutoff = min(paper * 0.8, paper - 20)
+        let r = 12
         // Skip a thin border: page edges and the desk aren't part of the drawing.
         let border = max(2, w / 60)
         var ink = [Bool](repeating: false, count: w * h)
         for y in border..<max(border, h - border) {
-            for x in border..<max(border, w - border) where gray[y * w + x] < cutoff {
-                ink[y * w + x] = true
+            let y0 = max(0, y - r), y1 = min(h - 1, y + r)
+            for x in border..<max(border, w - border) {
+                let x0 = max(0, x - r), x1 = min(w - 1, x + r)
+                let sum = sat[(y1 + 1) * W + x1 + 1] - sat[y0 * W + x1 + 1] - sat[(y1 + 1) * W + x0] + sat[y0 * W + x0]
+                let local = Float(sum / Double((x1 - x0 + 1) * (y1 - y0 + 1)))
+                let v = gray[y * w + x]
+                if v < local * 0.86, local - v > 12 { ink[y * w + x] = true }
             }
         }
         return ink
     }
 
-    /// Ink pixels that are part of lines. Pixels inside solid dark areas (a
-    /// hand, a shadow, heavy shading) are left out: they'd outweigh the lines.
-    static func inkPoints(_ gray: [Float], _ w: Int, _ h: Int) -> [(x: Int32, y: Int32)] {
+    /// Ink pixels that are part of pencil lines. Left out: pixels inside solid
+    /// dark areas (a hand, the desk, a shadow, heavy shading) and pixels near
+    /// them, because the edge of a dark area looks like a long line and would
+    /// outweigh the drawing.
+    static func lineMask(_ gray: [Float], _ w: Int, _ h: Int) -> [Bool] {
         let ink = inkMask(gray, w, h)
-        // Summed-area table to count ink in each 5×5 window.
         let W = w + 1
-        var sat = [Int32](repeating: 0, count: W * (h + 1))
-        for y in 0..<h {
-            var row: Int32 = 0
-            for x in 0..<w {
-                row += ink[y * w + x] ? 1 : 0
-                sat[(y + 1) * W + x + 1] = sat[y * W + x + 1] + row
+        func sat(_ m: [Bool]) -> [Int32] {
+            var t = [Int32](repeating: 0, count: W * (h + 1))
+            for y in 0..<h {
+                var row: Int32 = 0
+                for x in 0..<w {
+                    row += m[y * w + x] ? 1 : 0
+                    t[(y + 1) * W + x + 1] = t[y * W + x + 1] + row
+                }
             }
+            return t
         }
-        func count(_ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) -> Int32 {
+        func count(_ t: [Int32], _ x0: Int, _ y0: Int, _ x1: Int, _ y1: Int) -> Int32 {
             let x0 = max(0, x0), y0 = max(0, y0), x1 = min(w - 1, x1), y1 = min(h - 1, y1)
-            return sat[(y1 + 1) * W + x1 + 1] - sat[y0 * W + x1 + 1] - sat[(y1 + 1) * W + x0] + sat[y0 * W + x0]
+            return t[(y1 + 1) * W + x1 + 1] - t[y0 * W + x1 + 1] - t[(y1 + 1) * W + x0] + t[y0 * W + x0]
         }
+        let inkSAT = sat(ink)
+        // Solid: a 7×7 window that's mostly ink (pencil lines are 1-3 px wide).
+        var solid = [Bool](repeating: false, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w where ink[y * w + x] && count(inkSAT, x - 3, y - 3, x + 3, y + 3) >= 30 { solid[y * w + x] = true }
+        }
+        let solidSAT = sat(solid)
+        var lines = [Bool](repeating: false, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w where ink[y * w + x] && count(solidSAT, x - 6, y - 6, x + 6, y + 6) == 0 { lines[y * w + x] = true }
+        }
+        return lines
+    }
+
+    static func inkPoints(_ gray: [Float], _ w: Int, _ h: Int) -> [(x: Int32, y: Int32)] {
+        let lines = lineMask(gray, w, h)
         var points: [(x: Int32, y: Int32)] = []
         for y in 0..<h {
-            for x in 0..<w where ink[y * w + x] && count(x - 3, y - 3, x + 3, y + 3) < 30 {
-                points.append((Int32(x), Int32(y)))
-            }
+            for x in 0..<w where lines[y * w + x] { points.append((Int32(x), Int32(y))) }
         }
         return points
     }

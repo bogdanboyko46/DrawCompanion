@@ -20,22 +20,15 @@ struct InkStyle: Equatable {
         let n = width * height
         guard n > 0, rgba.count >= n * 4 else { return fallback }
         var lum = [Float](repeating: 0, count: n)
-        var histogram = [Int](repeating: 0, count: 256)
         for i in 0..<n {
-            let l = 0.299 * Float(rgba[i * 4]) + 0.587 * Float(rgba[i * 4 + 1]) + 0.114 * Float(rgba[i * 4 + 2])
-            lum[i] = l
-            histogram[min(255, Int(l))] += 1
+            lum[i] = 0.299 * Float(rgba[i * 4]) + 0.587 * Float(rgba[i * 4 + 1]) + 0.114 * Float(rgba[i * 4 + 2])
         }
-        // Paper brightness: most of the page is paper, so a high percentile.
-        let paper = Float(percentile(histogram, n, 0.75))
-        // Ink is clearly darker than the paper around it. Relative, so it works in dim light.
-        let cutoff = min(paper * 0.78, paper - 22)
-        var ink = [Bool](repeating: false, count: n)
+        // Pencil lines only: judged against the paper right around them, so a
+        // shadow over part of the page isn't mistaken for ink (and edges of
+        // dark areas like the desk are left out).
+        let ink = DrawingAligner.lineMask(lum, width, height)
         var inkLum: [Float] = []
-        for i in 0..<n where lum[i] < cutoff {
-            ink[i] = true
-            inkLum.append(lum[i])
-        }
+        for i in 0..<n where ink[i] { inkLum.append(lum[i]) }
         guard inkLum.count >= max(20, n / 2000) else { return fallback }
 
         // Color from the core of the lines (the darker half), not the blurred edges.

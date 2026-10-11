@@ -86,3 +86,42 @@ final class PageRegionTests: XCTestCase {
         XCTAssertNil(PageRegion.focus(rgba: page(w: 200, h: 100, ink: ink), width: 200, height: 100, paper: PaperSize(w: 1000, h: 500)))
     }
 }
+
+final class ShadowTests: XCTestCase {
+    /// Half the page in shadow (like the phone or a hand blocking the lamp),
+    /// pencil lines across both halves.
+    func shadowedPage(w: Int = 400, h: Int = 300, thickness: Int = 2) -> [UInt8] {
+        var px = [UInt8](repeating: 255, count: w * h * 4)
+        for y in 0..<h {
+            for x in 0..<w {
+                let v: UInt8 = y < h / 2 ? 150 : 225 // shadowed top, lit bottom
+                px[(y * w + x) * 4] = v; px[(y * w + x) * 4 + 1] = v; px[(y * w + x) * 4 + 2] = v - 10
+            }
+        }
+        func ink(_ x: Int, _ y: Int) {
+            let base: Int = y < h / 2 ? 80 : 110 // pencil looks darker in the shadow
+            let i = (y * w + x) * 4
+            px[i] = UInt8(base); px[i + 1] = UInt8(base); px[i + 2] = UInt8(base + 4)
+        }
+        for k in 0..<5 {
+            for x in 60..<340 { for t in 0..<thickness { ink(x, 30 + k * 55 + t) } }
+        }
+        return px
+    }
+
+    func testShadowIsNotInkForStyle() {
+        let style = InkStyle.estimate(rgba: shadowedPage(), width: 400, height: 300, paperWidth: 1000)
+        XCTAssertLessThan(style.red, 0.47, "color should be pencil, not shadowed paper (\(style.red))")
+        XCTAssertLessThan(style.width, 8, "thickness should be the pencil's (\(style.width))")
+    }
+
+    func testShadowIsNotInkForAlignment() {
+        var gray = [Float](repeating: 0, count: 400 * 300)
+        let px = shadowedPage()
+        for i in 0..<gray.count { gray[i] = Float(px[i * 4]) }
+        let lines = DrawingAligner.lineMask(gray, 400, 300).filter { $0 }.count
+        // 5 lines x 280 px x 2 px = 2800 pencil pixels; shadow must not add tens of thousands.
+        XCTAssertGreaterThan(lines, 1500)
+        XCTAssertLessThan(lines, 4000)
+    }
+}

@@ -26,24 +26,17 @@ enum PageRegion {
         let n = width * height
         guard n > 0, rgba.count >= n * 4 else { return nil }
         var lum = [Float](repeating: 0, count: n)
-        var histogram = [Int](repeating: 0, count: 256)
         for i in 0..<n {
-            let l = 0.299 * Float(rgba[i * 4]) + 0.587 * Float(rgba[i * 4 + 1]) + 0.114 * Float(rgba[i * 4 + 2])
-            lum[i] = l
-            histogram[min(255, Int(l))] += 1
+            lum[i] = 0.299 * Float(rgba[i * 4]) + 0.587 * Float(rgba[i * 4 + 1]) + 0.114 * Float(rgba[i * 4 + 2])
         }
-        var seen = 0, paperLevel: Float = 255
-        for (v, c) in histogram.enumerated() {
-            seen += c
-            if seen >= n * 3 / 4 { paperLevel = Float(v); break }
-        }
-        let cutoff = min(paperLevel * 0.78, paperLevel - 22)
+        // Pencil lines only (shadow-proof; see DrawingAligner.lineMask).
+        let lines = DrawingAligner.lineMask(lum, width, height)
 
         // Ink bounding box, ignoring a thin border (page edges and shadows).
         let border = max(2, width / 50)
         var minX = width, minY = height, maxX = -1, maxY = -1, count = 0
         for y in border..<(height - border) {
-            for x in border..<(width - border) where lum[y * width + x] < cutoff {
+            for x in border..<(width - border) where lines[y * width + x] {
                 minX = min(minX, x); maxX = max(maxX, x)
                 minY = min(minY, y); maxY = max(maxY, y)
                 count += 1
