@@ -140,42 +140,61 @@ final class AppModel: ObservableObject {
         let id = turnID
 
         let trackH = trackHeight
-        guard let frame = ar.session.currentFrame, let corners = ar.imageCorners(in: frame),
-              let (photos, style) = PageImaging.photos(frame.capturedImage, corners: corners, paper: ar.paper),
-              let baseline = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.trackWidth, height: trackH),
-              let reference = PageImaging.gray(frame.capturedImage, corners: corners, width: Self.alignWidth, height: alignHeight)
-        else {
+        let alignH = alignHeight
+        guard let frame = ar.session.currentFrame, let corners = ar.imageCorners(in: frame) else {
             print("[DC] page not ready, waiting")
             waitingForPage = true // sent from tick() once the page is in view
             return
         }
         waitingForPage = false
-        if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-            try? photos.full.write(to: dir.appendingPathComponent("last-page.jpg"))
-            try? photos.closeUp?.write(to: dir.appendingPathComponent("last-closeup.jpg"))
-            print("[DC] page \(photos.full.count) B, close-up \(photos.closeUp?.count ?? 0) B of \(String(describing: photos.region)), paper \(ar.paper), ink \(style)")
-        }
+        let pixelBuffer = frame.capturedImage
         let utterances = pending
         let current = outline
         let paper = ar.paper
         let backend = makeBackend()
+        let t0 = CACurrentMediaTime()
         turnAction = .ignore
         turnDrawing = false
         working = true
         inflight = Task { [weak self] in
+            // Photo work happens off the main thread so the camera and UI stay live.
+            let prepared = await Task.detached(priority: .userInitiated) { () -> (PagePhotos, InkStyle, [Float], [Float])? in
+                guard let (photos, style) = PageImaging.photos(pixelBuffer, corners: corners, paper: paper),
+                      let baseline = PageImaging.gray(pixelBuffer, corners: corners, width: Self.trackWidth, height: trackH),
+                      let reference = PageImaging.gray(pixelBuffer, corners: corners, width: Self.alignWidth, height: alignH)
+                else { return nil }
+                if let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                    try? photos.full.write(to: dir.appendingPathComponent("last-page.jpg"))
+                    try? photos.closeUp?.write(to: dir.appendingPathComponent("last-closeup.jpg"))
+                }
+                return (photos, style, baseline, reference)
+            }.value
+            guard let self, id == self.turnID, !Task.isCancelled else { return }
+            guard let (photos, style, baseline, reference) = prepared else {
+                self.working = false
+                self.inflight = nil
+                self.waitingForPage = true
+                return
+            }
+            print(String(format: "[DC] t+%.0f ms photos ready (page %d B, close-up %d B), paper %@, ink %@",
+                         (CACurrentMediaTime() - t0) * 1000, photos.full.count, photos.closeUp?.count ?? 0,
+                         String(describing: paper), String(describing: style)))
             do {
                 try await backend.run(utterances: utterances, current: current, page: photos, paper: paper) { event in
-                    self?.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style, reference: reference)
+                    if case .action(let a) = event { print(String(format: "[DC] t+%.0f ms action %@", (CACurrentMediaTime() - t0) * 1000, a.rawValue)) }
+                    if case .stroke = event, self.turnDrawing == false { print(String(format: "[DC] t+%.0f ms first stroke", (CACurrentMediaTime() - t0) * 1000)) }
+                    if case .done = event { print(String(format: "[DC] t+%.0f ms done", (CACurrentMediaTime() - t0) * 1000)) }
+                    self.handle(event, turn: id, utterances: utterances, baseline: (baseline, trackH), paper: paper, style: style, reference: reference)
                 }
             } catch {
-                guard let self, id == self.turnID, !Task.isCancelled else { return }
+                guard id == self.turnID, !Task.isCancelled else { return }
                 self.rollback?()
                 self.rollback = nil
                 self.pending.removeFirst(min(utterances.count, self.pending.count)) // don't retry forever
                 print("[DC] turn error: \(error)")
                 self.report(error.localizedDescription)
             }
-            if let self, id == self.turnID {
+            if id == self.turnID {
                 self.working = false
                 self.inflight = nil
             }
@@ -219,6 +238,12 @@ final class AppModel: ObservableObject {
         // The new outline's coordinates refer to this exact photo: align to it.
         aligner = DrawingAligner(reference: reference, width: Self.alignWidth, height: alignHeight)
         correction = .identity
+        // From now on the drawing decides where the page is; paper-edge
+        // detection (noisy on folded or curled paper) only takes over again if
+        // the drawing is lost for a while.
+        ar.followDrawing = aligner != nil
+        lastLock = CACurrentMediaTime()
+        print("[DC] aligner \(aligner == nil ? "unavailable (no drawing found)" : "ready")")
         pendingJump = nil
         let history = action == .revise && outline != nil ? outline!.history + utterances : utterances
         outline = Outline(strokes: [], history: history, style: style)
@@ -279,7 +304,7 @@ final class AppModel: ObservableObject {
     /// Measures how far the outline has drifted from the pencil lines (runs
     /// off the main thread, several times a second).
     private func alignStep() {
-        if ar.followDrawing, CACurrentMediaTime() - lastLock > 1.5 { ar.followDrawing = false }
+        if ar.followDrawing, CACurrentMediaTime() - lastLock > 3 { ar.followDrawing = false }
         guard let aligner, !aligning, fadeStart == nil, let frame = ar.session.currentFrame,
               let corners = ar.imageCorners(in: frame) else { return }
         aligning = true
@@ -294,7 +319,10 @@ final class AppModel: ObservableObject {
                 guard let self else { return }
                 self.aligning = false
                 // The page was re-pinned since this started: the reading is stale.
-                guard self.ar.version == version else { return }
+                guard self.ar.version == version else {
+                    print("[DC] align: dropped (page moved meanwhile)")
+                    return
+                }
                 guard self.aligner === aligner, let found else {
                     print("[DC] align: no match")
                     return
@@ -314,6 +342,7 @@ final class AppModel: ObservableObject {
                     return
                 }
                 self.pendingJump = nil
+                self.lastLock = CACurrentMediaTime()
                 print(String(format: "[DC] align: shift %.1f,%.1f px  scale %.3f  rot %.3f", found.tx, found.ty, (found.a + found.d) / 2, (found.c - found.b) / 2))
                 // Follow quickly; a little smoothing hides measurement jitter.
                 self.correction = self.correction.blended(toward: found, by: 0.8)
