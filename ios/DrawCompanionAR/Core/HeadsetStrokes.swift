@@ -43,6 +43,23 @@ enum HeadsetStrokes {
 
     static func length(_ v: SIMD2<Float>) -> Float { (v * v).sum().squareRoot() }
 
+    /// How strongly a stroke shows, given how much of it you've traced:
+    /// traced strokes step back so the untraced ones stand out, and a
+    /// finished one leaves your own pencil line in charge.
+    static func tracedLevel(progress: Double, done: Bool) -> Float {
+        done ? 0.25 : 1 - 0.5 * Float(min(1, max(0, progress)))
+    }
+
+    /// Moves `current` toward `target` smoothly (exponential, `timeConstant`
+    /// seconds), so values that arrive in steps (the tracker updates a few
+    /// times a second) don't make the lines blink.
+    static func approach(_ current: Float, _ target: Float, dt: Double, timeConstant: Double = 0.25) -> Float {
+        guard dt > 0 else { return current }
+        let k = Float(1 - exp(-dt / timeConstant))
+        let next = current + (target - current) * k
+        return abs(next - target) < 0.002 ? target : next
+    }
+
     /// When each stroke of the outline arrived, for the draw-on animation.
     /// A stroke counts as new when its path data differs from what was at
     /// its index before, so strokes moved by drift correction don't replay.

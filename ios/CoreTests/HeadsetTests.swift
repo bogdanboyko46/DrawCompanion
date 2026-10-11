@@ -147,6 +147,20 @@ final class HeadsetStrokesTests: XCTestCase {
         XCTAssertTrue(pieces([[1, 1]]).isEmpty)
     }
 
+    func testTracedStrokesStepBackSmoothly() {
+        XCTAssertEqual(HeadsetStrokes.tracedLevel(progress: 0, done: false), 1)
+        XCTAssertEqual(HeadsetStrokes.tracedLevel(progress: 0.5, done: false), 0.75)
+        XCTAssertEqual(HeadsetStrokes.tracedLevel(progress: 1, done: true), 0.25)
+        // Eases toward the target instead of jumping, and settles exactly.
+        var level: Float = 1
+        level = HeadsetStrokes.approach(level, 0.25, dt: 1.0 / 60)
+        XCTAssertLessThan(level, 1)
+        XCTAssertGreaterThan(level, 0.9)
+        for _ in 0..<120 { level = HeadsetStrokes.approach(level, 0.25, dt: 1.0 / 60) }
+        XCTAssertEqual(level, 0.25)
+        XCTAssertEqual(HeadsetStrokes.approach(0.5, 1, dt: 0), 0.5)
+    }
+
     func stroke(_ d: String) -> Stroke { Stroke(role: .contour, weight: .medium, d: d, closed: false, points: []) }
 
     func testNewStrokesAnimateAndOldOnesDoNot() {

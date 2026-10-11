@@ -72,6 +72,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var layoutFor: (optics: HeadsetOptics, size: CGSize)?
 
     private var arrivals = HeadsetStrokes.Arrivals()
+    private var traced: [Float] = [] // per stroke, eased toward the tracker's value
+    private var lastBuild: CFTimeInterval = 0
     private var lastFrameTimestamp: TimeInterval = -1
     private var animating = false
     private var stats = (since: CACurrentMediaTime(), frames: 0, cpu: 0.0)
@@ -397,7 +399,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         batches.removeAll(keepingCapacity: true)
         paperProbes.removeAll(keepingCapacity: true)
         let now = CACurrentMediaTime()
+        let dt = lastBuild > 0 ? min(0.1, now - lastBuild) : 0
+        lastBuild = now
         arrivals.update(scene.strokes, now: now)
+        if traced.count > scene.strokes.count { traced.removeLast(traced.count - scene.strokes.count) }
+        while traced.count < scene.strokes.count { traced.append(1) }
         guard scene.fade > 0, !scene.strokes.isEmpty else { return }
 
         let camera = frame.camera
@@ -425,11 +431,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         for (i, stroke) in scene.strokes.enumerated() {
             let role = Self.roleStyle(stroke.role)
             let progress = scene.progress.flatMap { i < $0.count ? $0[i] : nil }
-            // Traced strokes step back so the untraced ones stand out.
-            let traced: Float = progress.map { $0.done ? 0.3 : 1 - 0.5 * Float($0.progress) } ?? 1
+            // Traced strokes step back so the untraced ones stand out (eased).
+            let target = progress.map { HeadsetStrokes.tracedLevel(progress: $0.progress, done: $0.done) } ?? 1
             let arrival = arrivals.progress(i, now: now)
-            if arrival < 1 { animating = true }
-            let alpha = role.alpha * traced * scene.fade * HeadsetStrokes.Arrivals.opacity(arrival)
+            traced[i] = arrival < 1 ? target : HeadsetStrokes.approach(traced[i], target, dt: dt)
+            if arrival < 1 || traced[i] != target { animating = true }
+            let alpha = role.alpha * traced[i] * scene.fade * HeadsetStrokes.Arrivals.opacity(arrival)
             guard alpha > 0.002, let first = stroke.points.first else { continue }
 
             // Image pixels per paper unit near the stroke, so line widths are
