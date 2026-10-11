@@ -186,8 +186,8 @@ enum PageScanner {
             for x in border..<(gw - border) where px[(y * gw + x) * 4] > 40 { levels.append(px[(y * gw + x) * 4]) }
         }
         levels.sort()
-        let strong = levels.isEmpty ? 255 : Int(levels[min(levels.count - 1, levels.count * 95 / 100)])
-        let threshold = UInt8(max(70, min(200, strong / 2)))
+        let strong = levels.isEmpty ? 255 : Int(levels[min(levels.count - 1, levels.count * 99 / 100)])
+        let threshold = UInt8(max(90, min(210, strong * 55 / 100)))
         var ink = [Bool](repeating: false, count: gw * gh)
         for y in border..<(gh - border) {
             for x in border..<(gw - border) where px[(y * gw + x) * 4] > threshold { ink[y * gw + x] = true }
@@ -423,14 +423,15 @@ enum PageScanner {
             c.inputImage = m.outputImage
             return c.outputImage
         }
-        // Values are in linear light: a faint pencil line is ~0.1 darker than the paper
-        // around it; paper grain and JPEG noise stay under 0.04. Crayon colors are
+        // Values are in linear light: a pencil line is ~0.15–0.4 darker than the paper
+        // around it; paper grain, JPEG noise and writing showing through from the
+        // back of the page stay under ~0.07. Crayon colors are
         // well above 0.3 chroma; a bluish shadow on white paper stays under ~0.2.
         // Very dark areas (a black-filled shape, wider than any line) count too;
         // a shadow on white paper never gets that dark.
         let inverted = CIFilter.colorInvert()
         inverted.inputImage = d
-        guard let lineMask = ramp(lines.outputImage, gain: 10, floor: 0.04),
+        guard let lineMask = ramp(lines.outputImage, gain: 8, floor: 0.07),
               let colorMask = ramp(chroma.outputImage, gain: 6, floor: 0.22),
               let darkMask = ramp(inverted.outputImage, gain: 8, floor: 0.82) else { return image }
         let union = CIFilter.maximumCompositing()
