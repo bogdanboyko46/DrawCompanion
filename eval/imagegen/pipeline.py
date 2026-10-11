@@ -41,9 +41,14 @@ def nearest(sk):
 
 
 def process(orig_path, gen_path, verbose=False):
-    t0 = time.time()
     orig = np.asarray(Image.open(orig_path).convert("RGB"))
     gen = np.asarray(Image.open(gen_path).convert("RGB"))
+    return process_arrays(orig, gen)
+
+
+def process_arrays(orig, gen):
+    """orig: page photo RGB uint8; gen: generated image RGB uint8."""
+    t0 = time.time()
     units = 1000.0 / orig.shape[1]
     Wu, Hu = 1000, int(round(orig.shape[0] * units))     # page size in paper units
     W, H = Wu * PPU, Hu * PPU                            # working canvas

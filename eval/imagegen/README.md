@@ -187,3 +187,16 @@ $PY eval/imagegen/sheet.py eval/imagegen/results/runs eval/imagegen/results/cont
 $PY eval/imagegen/synth.py 5                                                                        # ground-truth registration test
 $PY eval/imagegen/profile.py eval/photos/page-2.jpg eval/imagegen/generated/p2-dog__red__gpt-image-2__clean__16x9.jpg
 ```
+
+## Server (for the iPhone app)
+
+`server.py` runs this pipeline for the app over Wi-Fi. After Claude's outline is up, the app POSTs the page photo, the words and the outline's box; the strokes that come back replace Claude's if the outline is unchanged and barely traced.
+
+```
+.../venv/bin/python eval/imagegen/server.py --host 0.0.0.0     # port 8787, gpt-image-2-5-flare
+curl http://<mac-ip>:8787/health
+```
+
+- `POST /upgrade` `{"page_jpeg": b64, "paper": {"w":1000,"h":H}, "said": [...], "box": {"x0","y0","x1","y1"}, "id": "..."}` → `{"ok":true,"strokes":[{"role","weight","d"}],"ms":{...}}` or `{"ok":false,"reason":"..."}` (the app then keeps Claude's outline).
+- Requests must carry `X-DC-Token: sha256("drawcompanion-upgrade:" + ANTHROPIC_API_KEY)`; the server reads both keys from `/Users/brandonj/DrawCompanion/.env`. Anyone else on the network gets 403 and can't spend Meshy credits.
+- Measured over the LAN: cat on page 2, 15.2 s (image model 13.6 s, register + trace 1.2 s).
