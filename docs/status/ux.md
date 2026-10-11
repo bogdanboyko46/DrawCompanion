@@ -2,17 +2,17 @@
 
 **Branch: `claude/dreamy-ramanujan-f4loae`** (based on `ar/ux`)
 
-## Done
+## Done — READY TO MERGE (CI green: [run 38098167255](https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38098167255), commit `c44c68a`, includes a merge of the lead branch at `5c07ad2`)
 
 | Item | Files | CI |
 |---|---|---|
-| Listening: adaptive phrase end, interruptions, backgrounding, task limit, retries | `Speech/SpeechListener.swift`, `Core/PhraseEndpointer.swift` (+ tests) | see below |
-| API key check (one free `GET /v1/models` request) | `Core/APIKeyCheck.swift` (+ tests) | |
-| First-run welcome (5 short steps, skippable, once) | `UI/OnboardingView.swift` (new), `App/DrawCompanionApp.swift`, `UI/ContentView.swift` | |
-| Phone view: status pill, live transcript, fixable error banners, offline detection | `UI/ContentView.swift` | |
-| Settings: masked key (check/replace/remove), Sample AI toggle, pause slider, headset section, show welcome again | `UI/SettingsView.swift` | |
-| App icon + launch background color | `Assets.xcassets/` (new; picked up by the synchronized folder) | |
-| Docs | `ios/README.md`, `README.md` | |
+| Listening: adaptive phrase end, interruptions, backgrounding, task limit, retries | `Speech/SpeechListener.swift`, `Core/PhraseEndpointer.swift` (+ tests) | green |
+| API key check (one free `GET /v1/models` request) | `Core/APIKeyCheck.swift` (+ tests) | green |
+| First-run welcome (5 short steps, skippable, once) | `UI/OnboardingView.swift` (new), `App/DrawCompanionApp.swift`, `UI/ContentView.swift` | green |
+| Phone view: status pill, live transcript, fixable error banners, offline detection | `UI/ContentView.swift` | green |
+| Settings: masked key (check/replace/remove), Sample AI toggle, pause slider, headset section, show welcome again | `UI/SettingsView.swift` | green |
+| App icon + launch background color | `Assets.xcassets/` (new; picked up by the synchronized folder) | green |
+| Docs | `ios/README.md`, `README.md` | green |
 
 New files I created (no one else owns them): `UI/OnboardingView.swift`, `Core/PhraseEndpointer.swift`, `Core/APIKeyCheck.swift`, `CoreTests/PhraseEndpointerTests.swift`, `CoreTests/APIKeyCheckTests.swift`, `Assets.xcassets/`.
 
@@ -38,6 +38,10 @@ New files I created (no one else owns them): `UI/OnboardingView.swift`, `Core/Ph
 ## Headset settings
 
 Settings › Headset uses the keys from the headset session (`HeadsetOptics.Key`, branch `claude/fervent-turing-1v3ob4`): a "Correct lens distortion" toggle plus sliders for `headset.zoom`, `headset.lensSeparationMM`, `headset.verticalOffsetMM`, `headset.fieldOfViewDegrees`, `headset.k1`, `headset.k2`, `headset.screenToLensMM`, and "Reset to defaults". Defaults match `HeadsetOptics()`. The keys are plain strings in `HeadsetOption.all` (`UI/SettingsView.swift`), so my branch builds without theirs; until their renderer is merged the sliders save values nothing reads yet.
+
+## Next
+- Tune the pause from the lead's `[DC] phrase` logs.
+- Keep merging the lead branch; follow up on any phone feedback.
 
 ## Requests for the lead
 
