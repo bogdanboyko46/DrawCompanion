@@ -188,8 +188,9 @@ final class HissDetector: @unchecked Sendable {
         if loud, logCount % 6 == 0 { print(String(format: "[hiss] zcr %.3f rms %.4f floor %.4f", zcr, rms, noiseFloor)) }
         if loud { logCount += 1 }
         run = hissy ? run + 1 : 0
-        // ~0.45 s of hiss at 4096-frame buffers (48 kHz → 85 ms each).
-        let needed = max(4, Int(0.45 * buffer.format.sampleRate / Double(n)))
+        // ~0.6 s of hiss at 4096-frame buffers (48 kHz → 85 ms each): longer
+        // than any "s" in ordinary speech.
+        let needed = max(6, Int(0.6 * buffer.format.sampleRate / Double(n)))
         if run >= needed {
             run = 0
             cooldown = needed * 3

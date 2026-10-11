@@ -75,9 +75,8 @@ extension AppModel {
 
     /// "Shhh" → whoever's talking stops.
     private func shush() {
-        guard hasCharacters else { return }
+        guard hasCharacters, talk.interrupt() else { return }
         flash("🤫")
-        talk.interrupt()
     }
 
     private func pointed(at tip: CGPoint) {

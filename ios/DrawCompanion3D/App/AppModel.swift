@@ -306,6 +306,7 @@ final class AppModel {
 
     private func say(_ text: String, by character: CharacterActor) {
         let id = character.job.id
+        print("[say] \(character.name): \(text)")
         speech[id] = SpeechLine(characterID: id, name: character.name, text: text)
         CharacterVoice.shared.speak(text, by: character)
         speechTimers[id]?.cancel()

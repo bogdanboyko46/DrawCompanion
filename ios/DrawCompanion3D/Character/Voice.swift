@@ -16,6 +16,7 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
 
     /// A character is talking, or just stopped (the room still rings a moment):
     /// the mic shouldn't take that for you.
+    var isSpeaking: Bool { synthesizer.isSpeaking }
     var isBusy: Bool { synthesizer.isSpeaking || !speakers.isEmpty || Date().timeIntervalSince(lastSound) < 0.6 }
 
     override private init() {
@@ -60,6 +61,8 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         let id = ObjectIdentifier(utterance)
+        let route = AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portType.rawValue)
+        print("[voice] speaking via \(route) category \(AVAudioSession.sharedInstance().category.rawValue)")
         Task { @MainActor in self.current = id }
     }
 
@@ -69,6 +72,7 @@ final class CharacterVoice: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        print("[voice] cancelled")
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in self.finished(id) }
     }

@@ -57,13 +57,20 @@ final class Conversation {
     }
 
     /// "Shhh": the character stops talking (and forgets what it was about to say).
-    func interrupt() {
+    /// Ignored unless a character is actually talking: an "s" in your own
+    /// words can sound like a hiss, and that mustn't throw away its answer.
+    @discardableResult
+    func interrupt() -> Bool {
+        let talking = CharacterVoice.shared.isSpeaking
+        let youreTalking = state == .listening && Date().timeIntervalSince(heardAt) < 1.2 && !heard.isEmpty
+        guard talking, !youreTalking else { print("[talk] shush ignored"); return false }
         turn += 1
         CharacterVoice.shared.stop()
         if state == .thinking { state = .idle }
         // The hiss itself was probably half-heard as words.
         stopRecognizing()
         caption = ""
+        return true
     }
 
     private func tick(_ scene: SceneController, canTalk: Bool) {
