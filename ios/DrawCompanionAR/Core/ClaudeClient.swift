@@ -12,20 +12,52 @@ final class ClaudeClient {
         var drawModel = "claude-sonnet-5-5"
         var drawEffort = "low" // latency matters more than depth: the user is waiting
         var baseURL = URL(string: "https://api.anthropic.com")!
+        /// Extra attempts after a transient failure (429, 5xx, overloaded, a
+        /// dropped connection) or an empty drawing. Short waits: the user is waiting.
+        var retries = 2
+        var backoff: [Double] = [0.4, 1.2] // seconds before retry 1, 2, …
     }
 
     enum Failure: LocalizedError, Equatable {
         case http(Int, String)
         case malformed(String)
+        /// The drawing model finished without a usable stroke (e.g. only "M 0 0").
+        case empty
+        /// The drawing model declined the request.
+        case declined
 
         var errorDescription: String? {
             switch self {
             case .http(401, _): return "The API key was rejected. Check it in Settings."
-            case .http(429, _): return "Busy, try again in a moment."
+            case .http(403, _): return "This API key isn't allowed to use Claude. Check it in Settings."
+            case .http(402, _): return "The Claude account is out of credit."
+            case .http(429, _): return "Too many requests right now. Try again in a moment."
+            case .http(529, _), .http(500..<600, _): return "Claude is overloaded right now. Try again in a moment."
             case let .http(code, message): return "AI error \(code): \(message)"
             case let .malformed(what): return "Unexpected AI response: \(what)"
+            case .empty: return "Claude didn't draw anything for that. Try saying it differently."
+            case .declined: return "Claude declined to draw that."
             }
         }
+
+        /// Worth trying again after a short wait.
+        var isTransient: Bool {
+            switch self {
+            case let .http(code, _): return [408, 409, 429, 500, 502, 503, 504, 529].contains(code)
+            case .empty: return true
+            default: return false
+            }
+        }
+    }
+
+    /// Network errors that usually go away on their own.
+    static func isTransient(_ error: Error) -> Bool {
+        if let failure = error as? Failure { return failure.isTransient }
+        if let url = error as? URLError {
+            return [.timedOut, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+                    .secureConnectionFailed].contains(url.code)
+        }
+        return false
     }
 
     let config: Config
@@ -46,8 +78,11 @@ final class ClaudeClient {
             "system": Prompts.filterSystem,
             "messages": [["role": "user", "content": Prompts.filterText(utterances: utterances, current: current)]],
         ]
-        let (data, response) = try await session.data(for: request(body, beta: nil))
-        try check(response, data)
+        let data = try await withRetries("filter") {
+            let (data, response) = try await self.session.data(for: self.request(body, beta: nil, timeout: 20))
+            try self.check(response, data)
+            return data
+        }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw Failure.malformed("not JSON")
         }
@@ -86,7 +121,19 @@ final class ClaudeClient {
                 ],
             ]],
         ]
-        let (bytes, response) = try await session.bytes(for: request(body, beta: "server-side-fallback-2026-07-01"))
+        // Retried only while nothing has been drawn yet: once strokes are on
+        // the paper, starting over would draw a second, different outline.
+        var delivered = 0
+        return try await withRetries("draw", canRetry: { delivered == 0 }) {
+            try await self.drawOnce(body, paper: paper) { stroke in
+                delivered += 1
+                await onStroke(stroke)
+            }
+        }
+    }
+
+    private func drawOnce(_ body: [String: Any], paper: PaperSize, onStroke: (Stroke) async -> Void) async throws -> Int {
+        let (bytes, response) = try await session.bytes(for: request(body, beta: "server-side-fallback-2026-07-01", timeout: 60))
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             var data = Data()
             for try await byte in bytes { data.append(byte) }
@@ -109,7 +156,7 @@ final class ClaudeClient {
                       let text = delta["text"] as? String else { continue }
                 raw += text
                 for json in scanner.push(text) {
-                    for stroke in PathFlattener.strokes(fromJSON: json, paper: paper) {
+                    for stroke in PathFlattener.strokes(fromJSON: json, paper: paper) where Self.isVisible(stroke) {
                         await onStroke(stroke)
                         delivered += 1
                     }
@@ -117,17 +164,44 @@ final class ClaudeClient {
             case "message_delta":
                 stopReason = (event["delta"] as? [String: Any])?["stop_reason"] as? String ?? stopReason
             case "error":
-                let message = (event["error"] as? [String: Any])?["message"] as? String ?? "stream error"
-                throw Failure.http(500, message)
+                let error = event["error"] as? [String: Any]
+                let message = error?["message"] as? String ?? "stream error"
+                throw Failure.http(error?["type"] as? String == "overloaded_error" ? 529 : 500, message)
             default:
                 break
             }
         }
         print("[DC] draw stop=\(stopReason ?? "nil") delivered=\(delivered) raw: \(raw.prefix(600))")
-        if delivered == 0, stopReason != "refusal", stopReason != "end_turn" {
-            throw Failure.malformed("no outline (stop_reason: \(stopReason ?? "none"))")
+        if delivered == 0 {
+            // Never a silent "nothing happened": the caller retries or shows why.
+            throw stopReason == "refusal" ? Failure.declined : Failure.empty
         }
         return delivered
+    }
+
+    /// Runs `attempt`, trying again after transient failures with a short wait.
+    /// A cancelled turn (the user kept talking) stops at once.
+    private func withRetries<T>(_ label: String, canRetry: () -> Bool = { true },
+                                _ attempt: () async throws -> T) async throws -> T {
+        var tries = 0
+        while true {
+            do {
+                return try await attempt()
+            } catch {
+                guard tries < config.retries, Self.isTransient(error), canRetry(), !Task.isCancelled else { throw error }
+                let wait = config.backoff.isEmpty ? 0.5 : config.backoff[min(tries, config.backoff.count - 1)]
+                tries += 1
+                print("[DC] \(label) retry \(tries) in \(wait)s after: \(error)")
+                try await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+            }
+        }
+    }
+
+    /// Drops strokes that would draw nothing visible (a dot like "M 0 0 L 0 0").
+    static func isVisible(_ stroke: Stroke) -> Bool {
+        let xs = stroke.points.map(\.x), ys = stroke.points.map(\.y)
+        guard let x0 = xs.min(), let x1 = xs.max(), let y0 = ys.min(), let y1 = ys.max() else { return false }
+        return max(x1 - x0, y1 - y0) >= 2
     }
 
     // MARK: helpers
@@ -138,10 +212,10 @@ final class ClaudeClient {
         }
     }
 
-    private func request(_ body: [String: Any], beta: String?) throws -> URLRequest {
+    private func request(_ body: [String: Any], beta: String?, timeout: TimeInterval) throws -> URLRequest {
         var req = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))
         req.httpMethod = "POST"
-        req.timeoutInterval = 120
+        req.timeoutInterval = timeout // longest silence allowed between bytes
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")

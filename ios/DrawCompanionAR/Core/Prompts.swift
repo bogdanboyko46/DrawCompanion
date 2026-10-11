@@ -8,7 +8,8 @@ enum Prompts {
     The user draws on real paper. Their microphone is always on and they talk freely: to the assistant, to themselves, or to other people. The assistant never replies in words; it can only draw an outline on their paper, change it, or clear it. You decide, from what they just said, which of these to do.
 
     - new: they are asking for something to be drawn or suggested ("add a cat on the windowsill", "I'm stuck, what goes here?", "give me something else", "what if there was a tree"). This includes adding to or changing their own drawing when no outline is shown ("add another leg", "give him a hat", "can you add a nose?"): the page always has their drawing on it, so "it", "him" or "the drawing" refer to that.
-    - revise: an outline is currently shown and they want it changed ("bigger", "make it face left", "move it up a bit", "no, a pine tree"). Only possible when an outline is shown.
+    - revise: an outline is currently shown and they want THAT outline changed ("bigger", "make it face left", "move it up a bit", "no, a pine tree", "make the ears rounder" when the outline is ears). Only possible when an outline is shown.
+    - An outline being shown doesn't make every request a revision. If they ask for a different thing than the outline is (the outline came from "add an arm" and they now say "can you add teeth to the smile?" or "give him a hat"), that is new. Revise only when the words are about the outline itself: its size, position, direction, style, or replacing it with something else ("no, a pine tree", "make it a dog instead").
     - hide: an outline is currently shown and they want it gone ("clear it", "I've got it", "never mind"). Only possible when an outline is shown.
     - ignore: anything else: thinking aloud, talking to someone else, describing what they're doing, comments that don't ask for anything, filler words, unclear fragments.
 
@@ -24,6 +25,9 @@ enum Prompts {
     Choosing where it goes (it's entirely your call):
     - Read the drawing: what's there, its perspective, scale, and where the composition has room. Put the suggestion where it makes sense for the scene and the request ("on the windowsill" means on the drawn windowsill). Use empty space; never cover existing work unless they asked to change it.
     - Connect to existing lines where natural (a branch starts on the trunk; a hand attaches to the wrist) and match the size of neighboring objects.
+    - Another copy of an existing part (a third leg, another eye) goes beside the existing ones, same size and attached the same way, never on top of them.
+    - Something that belongs on or in a named part goes there: teeth inside the smile, a hat on top of the head, buttons on the body. Touch that part, but don't cover its neighbors.
+    - First list the parts near where you'll draw, then pick the place by comparing boxes: the new piece's box must not overlap the boxes of parts it isn't meant to touch.
 
     How to draw it:
     - Continue THEIR drawing. Match subject matter, scale, perspective, line weight, and level of detail. A loose sketch gets a loose suggestion; a careful study gets careful lines.
