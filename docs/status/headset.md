@@ -5,7 +5,9 @@
 ## Direction change noted
 Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
 
-## New: printed-ink look (phone view and headset) — CI pending
+## READY TO MERGE: printed-ink look (phone view and headset)
+CI green on `1b347af` (run https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38100999548).
+
 The outline is now *multiplied* into the camera image instead of painted over it, the way real ink darkens paper: paper grain, lighting gradients and your hand's shadow show through the lines. The paper color is measured each frame from ~100 camera pixels just beside the outline (brighter half averaged, smoothed), and the line's transmittance = ink color ÷ paper color, so on average-lit paper the line is exactly the drawing's own measured ink color. Light ink on darker paper falls back to ordinary blending automatically. Math in `Core/HeadsetInk.swift`, tests in `CoreTests/HeadsetTests.swift`.
 - Toggle for A/B: UserDefaults Bool `outline.printedInk` (default true; `HeadsetInk.printedKey`). Applies live.
 - What to look for: lines should look like pencil on the page rather than a sticker; in a shadow they darken with the paper. Console prints `[DC] outline: paper measured r… g… b…; printed-ink look on` once.
