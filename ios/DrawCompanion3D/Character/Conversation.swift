@@ -4,7 +4,7 @@ import Speech
 import UIKit
 
 /// Hold-to-talk with a character: on-device speech recognition while the
-/// button is held, then Claude answers in the character's voice.
+/// you've said "shhh", then Claude answers in the character's voice.
 @MainActor
 @Observable
 final class Conversation {
@@ -32,8 +32,11 @@ final class Conversation {
 
     func press(in scene: SceneController) {
         guard state == .idle else { return }
-        guard permitted() else { return }
-        guard let character = Self.facing(in: scene) else { return }
+        guard permitted(then: { [weak self, weak scene] in
+            // Granted just now: carry on listening rather than making them ask again.
+            if let self, let scene { self.press(in: scene) }
+        }) else { print("[talk] waiting for permission"); return }
+        guard let character = Self.facing(in: scene) else { print("[talk] nobody to talk to"); return }
         guard let recognizer, recognizer.isAvailable else {
             return note("Speech recognition isn't available right now. Try again in a moment.")
         }
@@ -133,7 +136,7 @@ final class Conversation {
         }
         guard !said.isEmpty else {
             state = .idle
-            return note("I didn't catch that. Hold the button while you talk.")
+            return note("I didn't catch that. Say shhh, then talk.")
         }
         character.ponder()
 
@@ -183,7 +186,7 @@ final class Conversation {
 
     /// True if both are granted. Otherwise asks (first use) or explains, and
     /// returns false: the alert breaks the hold, so the next press talks.
-    private func permitted() -> Bool {
+    private func permitted(then granted: @escaping @MainActor () -> Void) -> Bool {
         let speech = SFSpeechRecognizer.authorizationStatus()
         let mic = AVAudioApplication.shared.recordPermission
         if speech == .authorized && mic == .granted { return true }
@@ -202,7 +205,7 @@ final class Conversation {
                 SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
             }
             if micOK && speechOK {
-                note("All set! Hold the button and talk.")
+                granted()
             } else {
                 needsSettings = true
                 note("No problem. To talk later, allow the microphone and speech recognition in Settings.", for: 6)

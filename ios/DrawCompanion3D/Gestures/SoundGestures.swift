@@ -1,5 +1,6 @@
 import AVFoundation
 import SoundAnalysis
+import Speech
 
 /// Listens for a finger snap or a clap (Apple's built-in sound classifier) and
 /// a "shhh" (a steady hiss, detected directly: the classifier has no shush),
@@ -30,6 +31,9 @@ final class SoundGestures {
 
     /// Asks for the mic once, then starts listening.
     func start() {
+        if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { _ in }
+        }
         AVAudioApplication.requestRecordPermission { granted in
             Task { @MainActor in
                 guard granted else { print("[sound] mic permission denied: snapping won't work"); return }
