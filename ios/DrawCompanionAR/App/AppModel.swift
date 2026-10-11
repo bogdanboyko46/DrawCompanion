@@ -58,6 +58,9 @@ final class AppModel: ObservableObject {
     private var trackState: CompletionTracker.State?
     private var fadeStart: TimeInterval?
     private var lastTrackCorners: [CGPoint]?
+    private var tracking = false
+    private var lastWarm: TimeInterval = 0
+    private let trackQueue = DispatchQueue(label: "drawcompanion.track", qos: .userInitiated)
 
     // Turns: what was said and not yet acted on, the turn in flight, and how
     // to undo a half-drawn outline if that turn is cancelled.
@@ -259,10 +262,10 @@ final class AppModel: ObservableObject {
         // the drawing is lost for a while.
         ar.followDrawing = aligner != nil
         dumpedAlignImages = false
-        Self.dumpGray(reference, Self.alignWidth, alignHeight, name: "align-reference.pgm")
+        let h = alignHeight
+        alignQueue.async { Self.dumpGray(reference, Self.alignWidth, h, name: "align-reference.pgm") }
         lastLock = CACurrentMediaTime()
         print("[DC] aligner \(aligner == nil ? "unavailable (no drawing found)" : "ready")")
-        pendingJump = nil
         let history = action == .revise && outline != nil ? outline!.history + utterances : utterances
         outline = Outline(strokes: [], history: history, style: style)
         tracker = nil
@@ -281,6 +284,7 @@ final class AppModel: ObservableObject {
         aligner = nil
         correction = .identity
         pendingJump = nil
+        lastReading = nil
         outline = nil
         tracker = nil
         trackState = nil
@@ -297,6 +301,14 @@ final class AppModel: ObservableObject {
         let now = CACurrentMediaTime()
         pageFound = ar.corners != nil && ar.trackingNormal
         if waitingForPage, ar.corners != nil, inflight == nil { sendTurn() }
+        // You started talking: open the connection to the API now, so the
+        // request at the end of the phrase doesn't also wait for the handshake.
+        if !usingMock, !LiveSpeech.shared.partial.isEmpty, now - lastWarm > 20 {
+            lastWarm = now
+            var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+            req.httpMethod = "HEAD" // unauthenticated and free; only the connection matters
+            URLSession.shared.dataTask(with: req).resume()
+        }
 
         if let start = fadeStart, now - start > 0.9 { clearOutline() }
         guard let tracker, fadeStart == nil, let frame = ar.session.currentFrame,
@@ -307,12 +319,29 @@ final class AppModel: ObservableObject {
             let moved = zip(last, corners).map { hypot($0.x - $1.x, $0.y - $1.y) }.max() ?? 0
             if moved > frame.camera.imageResolution.width * 0.02 { return }
         }
-        guard let raw = PageImaging.gray(frame.capturedImage, corners: corners, width: tracker.width, height: tracker.height) else { return }
-        // Compare in the reference photo's frame, so drift doesn't look like ink.
-        let gray = warpedToReference(raw, width: tracker.width, height: tracker.height)
-        let state = tracker.update(gray, now: now)
-        trackState = state
-        if state.done { fadeStart = now }
+        // Building the page image and comparing it takes several milliseconds:
+        // done on the main thread it made the view hitch every 0.3 s.
+        guard !tracking else { return }
+        tracking = true
+        let pixelBuffer = frame.capturedImage
+        let map = referenceToCurrent
+        let k = ar.paper.w / Double(tracker.width)
+        trackQueue.async { [weak self] in
+            var state: CompletionTracker.State?
+            if let raw = PageImaging.gray(pixelBuffer, corners: corners, width: tracker.width, height: tracker.height) {
+                // Compare in the reference photo's frame, so drift doesn't look like ink.
+                let gray = Self.warped(raw, width: tracker.width, height: tracker.height, map: map, unitsPerPixel: k)
+                state = tracker.update(gray, now: now)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.tracking = false
+                // The outline was replaced or is already fading: this result is stale.
+                guard let state, self.tracker === tracker, self.fadeStart == nil else { return }
+                self.trackState = state
+                if state.done { self.fadeStart = now }
+            }
+        }
     }
 
     // MARK: rendering
@@ -437,9 +466,8 @@ final class AppModel: ObservableObject {
         return Affine2(a: inv.a, b: inv.b, tx: inv.tx * k, c: inv.c, d: inv.d, ty: inv.ty * k)
     }
 
-    private func warpedToReference(_ gray: [Float], width: Int, height: Int) -> [Float] {
-        guard let map = referenceToCurrent else { return gray }
-        let k = ar.paper.w / Double(width) // paper units per pixel of this image
+    nonisolated private static func warped(_ gray: [Float], width: Int, height: Int, map: Affine2?, unitsPerPixel k: Double) -> [Float] {
+        guard let map else { return gray }
         var out = [Float](repeating: 0, count: width * height)
         for y in 0..<height {
             for x in 0..<width {
