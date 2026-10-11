@@ -233,7 +233,13 @@ final class ARController: NSObject, ARSessionDelegate {
     }
 
     private func place(_ imageCorners: [CGPoint], using frame: ARFrame) {
-        let hits = imageCorners.compactMap { raycast($0, frame) }
+        var hits = imageCorners.compactMap { raycast($0, frame) }
+        if hits.count < 4 {
+            // The desk isn't mapped yet (dark, glossy or plain desks): use the
+            // depth sensor's height of the paper, measured across the sheet,
+            // and put each corner where its line of sight meets that level desk.
+            hits = Self.cornersOnDepthPlane(imageCorners, frame) ?? []
+        }
         guard hits.count == 4 else { return miss("desk surface not found under the corners", frame) }
         guard var next = Self.fitRectangle(hits) else { return miss("not paper-sized", frame) }
         if let old = corners {
@@ -307,16 +313,47 @@ final class ARController: NSObject, ARSessionDelegate {
                 return SIMD3(t.x, t.y, t.z)
             }
         }
-        guard let p = Self.depthPoint(point, frame) else { return nil }
-        if !loggedDepthCheck, let back = Self.project(p, camera: frame.camera) {
-            // One-time sanity check: the depth point must land back where it came from.
-            loggedDepthCheck = true
-            let res = frame.camera.imageResolution
-            print(String(format: "[DC] page: using LiDAR depth; check %.1f px off", hypot(back.x - point.x * res.width, back.y - point.y * res.height)))
-        }
-        return p
+        return nil
     }
-    private var loggedDepthCheck = false
+
+    /// The four corners on a level plane at the paper's height. The height is
+    /// the median world height of LiDAR points across the middle of the sheet
+    /// (corner pixels themselves mix paper and desk, and were off by cm).
+    static func cornersOnDepthPlane(_ q: [CGPoint], _ frame: ARFrame) -> [SIMD3<Float>]? {
+        var heights: [Float] = []
+        for i in 0..<7 {
+            for j in 0..<7 {
+                let u = 0.2 + 0.6 * CGFloat(i) / 6, v = 0.2 + 0.6 * CGFloat(j) / 6
+                let top = CGPoint(x: q[0].x + (q[1].x - q[0].x) * u, y: q[0].y + (q[1].y - q[0].y) * u)
+                let bottom = CGPoint(x: q[3].x + (q[2].x - q[3].x) * u, y: q[3].y + (q[2].y - q[3].y) * u)
+                let p = CGPoint(x: top.x + (bottom.x - top.x) * v, y: top.y + (bottom.y - top.y) * v)
+                if let w = depthPoint(p, frame) { heights.append(w.y) }
+            }
+        }
+        guard heights.count >= 15 else { return nil }
+        let level = heights.sorted()[heights.count / 2]
+        let cam = frame.camera
+        let origin = SIMD3(cam.transform.columns.3.x, cam.transform.columns.3.y, cam.transform.columns.3.z)
+        let k = cam.intrinsics, res = cam.imageResolution
+        let corners: [SIMD3<Float>] = q.compactMap { p in
+            // Line of sight through this pixel, in world space.
+            let u = Float(p.x * res.width), v = Float(p.y * res.height)
+            let local = SIMD4<Float>((u - k[2][0]) / k[0][0], -(v - k[2][1]) / k[1][1], -1, 0)
+            let d4 = cam.transform * local
+            let dir = SIMD3(d4.x, d4.y, d4.z)
+            guard abs(dir.y) > 1e-4 else { return nil }
+            let t = (level - origin.y) / dir.y
+            guard t > 0.05, t < 3 else { return nil }
+            return origin + dir * t
+        }
+        if corners.count == 4, !loggedDepthPlane {
+            loggedDepthPlane = true
+            print(String(format: "[DC] page: on LiDAR plane at height %.3f m (%d samples, spread %.1f cm)", level, heights.count,
+                         ((heights.sorted()[heights.count * 9 / 10] - heights.sorted()[heights.count / 10]) * 100)))
+        }
+        return corners.count == 4 ? corners : nil
+    }
+    nonisolated(unsafe) private static var loggedDepthPlane = false
 
     /// World position of an image point (normalized, origin top-left) from the
     /// LiDAR depth map: the median depth around it, unprojected through the camera.
