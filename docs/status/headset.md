@@ -1,6 +1,6 @@
 # Headset session status
 
-**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at d1e889d)
+**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at 59e71e9)
 
 ## Direction change noted
 Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
