@@ -393,8 +393,8 @@ struct Star: Shape {
         let inner = outer * 0.48
         var points: [CGPoint] = []
         for i in 0..<10 {
-            let r = i.isMultiple(of: 2) ? outer : inner
-            let a = -Double.pi / 2 + Double(i) * Double.pi / 5
+            let r: CGFloat = i.isMultiple(of: 2) ? outer : inner
+            let a = -CGFloat.pi / 2 + CGFloat(i) * CGFloat.pi / 5
             points.append(CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a)))
         }
         var p = Path()
