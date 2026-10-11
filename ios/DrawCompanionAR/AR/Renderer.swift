@@ -76,6 +76,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lastBuild: CFTimeInterval = 0
     private var lastFrameTimestamp: TimeInterval = -1
     private var animating = false
+    private var lastFade: Float = 1
     private var stats = (since: CACurrentMediaTime(), frames: 0, cpu: 0.0)
 
     /// One piece of a stroke; matches `Capsule` in Shaders.metal.
@@ -235,7 +236,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             crop = Self.fillCrop(view: drawableSize, image: image)
         }
 
-        animating = scene.fade > 0 && scene.fade < 1
+        // Animating while the app's fade is moving (a fade held steady, e.g. the
+        // faint outline shown while a refined one loads, needs no extra frames).
+        animating = scene.fade != lastFade
+        lastFade = scene.fade
         buildCapsules(scene, frame: frame, image: image, crop: crop, target: targetSize)
         let buffer = upload()
         measurePaper(frame.capturedImage)

@@ -1,9 +1,12 @@
 # Headset session status
 
-**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at 59e71e9)
+**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at f037291)
 
 ## Direction change noted
 Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
+
+## New: no 120 Hz redraws while the faint outline waits for a refinement — CI pending
+Lead's 613dc4a holds `Scene.fade` at 0.4 while a refined outline is coming. The renderer treated any fade between 0 and 1 as an animation and redrew at 120 Hz the whole time. Now it only counts as animating while the fade value is changing. (When the refined outline arrives, its strokes have new path data, so they draw themselves on, which looks intended.)
 
 ## READY TO MERGE: traced strokes fade smoothly
 CI green on `6b3a9cc` (run https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38104646579).
