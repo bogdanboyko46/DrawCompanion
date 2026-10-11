@@ -5,7 +5,9 @@
 ## Direction change noted
 Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
 
-## New: traced strokes fade smoothly — CI pending
+## READY TO MERGE: traced strokes fade smoothly
+CI green on `6b3a9cc` (run https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38104646579).
+
 The tracker's progress arrives a few times a second, so traced strokes used to dim in visible steps. The renderer now eases each stroke's level (0.25 s time constant) and keeps drawing at 120 Hz while it settles. A finished stroke now drops to 25% (was 30%) so your own pencil line takes over, which matters more now that the printed look multiplies the outline onto your line. `HeadsetStrokes.tracedLevel` / `approach`, tested.
 
 Lead's phone note on line weight (widths should match the pencil after 03e42c1): nothing to change on my side until you report back.
