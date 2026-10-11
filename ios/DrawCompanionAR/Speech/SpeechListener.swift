@@ -27,8 +27,8 @@ final class SpeechListener: NSObject, SFSpeechRecognizerDelegate {
     }
 
     /// UserDefaults key for the base pause that ends a phrase (seconds).
-    static let pauseKey = "dc.speech.pause"
-    static let defaultPause: TimeInterval = 1.0
+    nonisolated static let pauseKey = "dc.speech.pause"
+    nonisolated static let defaultPause: TimeInterval = 1.0
 
     private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var engine = AVAudioEngine()
