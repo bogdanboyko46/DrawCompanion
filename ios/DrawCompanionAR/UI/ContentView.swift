@@ -113,6 +113,7 @@ struct PhoneOverlay: View {
                 .transition(.scale.combined(with: .opacity))
             }
 
+            if AppModel.headsetAvailable {
             Button { typing = false; model.enterHeadset() } label: {
                 Label("Headset view", systemImage: "eyeglasses")
                     .font(.subheadline.weight(.semibold))
@@ -120,6 +121,7 @@ struct PhoneOverlay: View {
                     .frame(height: 44)
                     .background(Color.brand, in: Capsule())
                     .foregroundStyle(.black)
+            }
             }
         }
         .animation(.easeOut(duration: 0.2), value: model.hasOutline)

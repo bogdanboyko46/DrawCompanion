@@ -211,10 +211,12 @@ private struct TalkStep: View {
                 Example(said: "“Bigger, and facing left.”", does: "changes it")
                 Example(said: "“Clear it.”", does: "removes it")
             }
+            if AppModel.headsetAvailable {
             Text("Using a headset viewer? Tap **Headset view**, slide the phone in, and talk. Double-tap the screen (or the viewer's button twice) to come back.")
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
+            }
             PrimaryButton(title: "Start drawing", action: done)
         }
     }

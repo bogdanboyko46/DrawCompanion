@@ -60,7 +60,7 @@ struct SettingsView: View {
                 keySection
                 aiSection
                 listeningSection
-                headsetSection
+                if AppModel.headsetAvailable { headsetSection }
                 helpSection
             }
             .navigationTitle("Settings")

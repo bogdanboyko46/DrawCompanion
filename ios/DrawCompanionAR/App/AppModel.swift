@@ -8,6 +8,9 @@ import SwiftUI
 @MainActor
 final class AppModel: ObservableObject {
     @Published var headset = false
+    /// The side-by-side headset view is switched off for now: the app uses the
+    /// normal full-screen AR view. Flip to true to bring the headset view back.
+    static let headsetAvailable = false
     @Published private(set) var listening = false
     @Published private(set) var working = false
     @Published private(set) var pageFound = false
