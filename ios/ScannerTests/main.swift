@@ -252,5 +252,50 @@ for c in spec.cases {
     }
 }
 
+// Viewfinder capture: the app scans a centered square of the screen, not a
+// detected page. Take a centered square of the photo that includes both paper
+// edges and some table, and check that only the drawing comes out.
+for (file, art) in [("overhead.jpg", "cat"), ("pencil-shadow.jpg", "pencil")] {
+    print("\n\(file), viewfinder")
+    let image = load(fixtures.appendingPathComponent(file))
+    let W = Double(image.width), H = Double(image.height)
+    let side = 0.7 * H, x0 = (W - side) / 2, y0 = (H - side) / 2
+    // Vision-normalized corners (origin bottom-left), TL, TR, BR, BL as seen.
+    let n = { (x: Double, y: Double) in CGPoint(x: x / W, y: 1 - y / H) }
+    let square = DetectedPage(imageCorners: [n(x0, y0), n(x0 + side, y0), n(x0 + side, y0 + side), n(x0, y0 + side)], confidence: 1)
+    guard let (_, crop) = Optional(PageScanner.rectify(pixelBuffer(image), page: square, aspect: 1)).flatMap({ $0 }) else {
+        check(false, "viewfinder crop"); continue
+    }
+    let name = file.replacingOccurrences(of: ".jpg", with: "") + "-viewfinder"
+    save(crop, "\(name).png")
+    guard let iso = PageScanner.isolate(crop) else { check(false, "found a figure in the frame"); continue }
+    save(iso.figure, "\(name)-figure.png")
+    print("THUMB \(name)-figure \(thumbnail(iso.figure))")
+    let cut = CIImage(cgImage: iso.cutout)
+    // Photo point -> frame fraction.
+    let f = { (px: Double, py: Double) in (CGFloat((px - x0) / side), CGFloat((py - y0) / side)) }
+    // Paper edges cross the frame at x ≈ 540 and 1375 (photo pixels) halfway down.
+    for (label, px, py) in [("left paper edge", 540.0, 720.0), ("right paper edge", 1378.0, 720.0)] {
+        let (x, y) = f(px, py)
+        let a = alphaMax(cut, x: x - 0.02, y: y - 0.1, w: 0.04, h: 0.2)
+        check(a < 0.2, "leaves out the \(label) (alpha \(String(format: "%.2f", a)))")
+    }
+    // A point on the drawing, page fractions mapped through the overhead photo's page placement.
+    let page = { (u: Double, v: Double) in (560 + u * 815, 180 + v * 1095) }
+    let keep = art == "pencil" ? [("face outline", 0.286, 0.451), ("left ear line", 0.324, 0.249)] : [("body", 0.31, 0.57), ("stick arm", 0.214, 0.471)]
+    for (label, u, v) in keep {
+        let (px, py) = page(u, v)
+        let (x, y) = f(px, py)
+        let a = alphaMax(cut, x: x - 0.02, y: y - 0.02, w: 0.04, h: 0.04)
+        check(a > 0.6, "keeps the \(label) (alpha \(String(format: "%.2f", a)))")
+    }
+    if art == "pencil" {
+        let (px, py) = page(0.86, 0.88)
+        let (x, y) = f(px, py)
+        let a = alphaMax(cut, x: x - 0.03, y: y - 0.03, w: 0.06, h: 0.06)
+        check(a < 0.2, "leaves out the shadow (alpha \(String(format: "%.2f", a)))")
+    }
+}
+
 print(failures.isEmpty ? "\nAll scanner checks passed." : "\n\(failures.count) check(s) failed:\n- " + failures.joined(separator: "\n- "))
 exit(failures.isEmpty ? 0 : 1)

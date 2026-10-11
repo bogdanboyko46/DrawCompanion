@@ -10,7 +10,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             if showOutline {
-                PageOutline(points: model.pageOutline)
+                ReticleView()
                     .ignoresSafeArea()
                     .allowsHitTesting(false)
                     .transition(.opacity)
@@ -27,7 +27,6 @@ struct ContentView: View {
             }
         }
         .animation(.spring(duration: 0.4), value: model.phase)
-        .animation(.easeInOut(duration: 0.2), value: model.pageFound)
         .sheet(isPresented: $model.showLibrary) { LibraryView() }
         .sheet(isPresented: $model.showSettings) { SettingsView() }
         .sheet(item: $model.snapshot) { SnapshotView(item: $0) }
@@ -132,7 +131,6 @@ private struct CapturePanel: View {
                                        startPoint: .leading, endPoint: .trailing),
                         in: RoundedRectangle(cornerRadius: 16))
                     .foregroundStyle(.white)
-                    .opacity(model.pageFound ? 1 : 0.75)
             }
             .buttonStyle(.plain)
         }
@@ -141,9 +139,8 @@ private struct CapturePanel: View {
     }
 
     private var prompt: String {
-        if model.pageFound { return "Found your page. Hold steady." }
         if model.hasCharacters { return "Tap the table to call it over. Tap it to say hi. Pinch to resize." }
-        return "Point the camera at a character you drew on paper."
+        return "Center a drawing in the frame, then tap below."
     }
 }
 

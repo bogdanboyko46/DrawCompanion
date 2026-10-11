@@ -25,7 +25,6 @@ final class AppModel {
     enum Phase: Equatable { case scanning, capturing, making, alive }
 
     var phase: Phase = .scanning
-    var pageOutline: [CGPoint] = []
     var hint = ""
     var job: CharacterJob?
     var drawingImage: UIImage?
@@ -50,7 +49,6 @@ final class AppModel {
     @ObservationIgnored private var page: CapturedPage?
     @ObservationIgnored private var speechTimers: [String: Task<Void, Never>] = [:]
 
-    var pageFound: Bool { pageOutline.count == 4 }
     var hasCharacters: Bool { !scene.actors.isEmpty }
 
     var api: CharacterAPI {
@@ -70,7 +68,6 @@ final class AppModel {
         useServer = UserDefaults.standard.bool(forKey: "useServer")
         Keys.importBundledDevKeys()
         keysReady = Keys.haveBoth
-        scene.onPageOutline = { [weak self] outline in self?.pageOutline = outline }
         scene.onHeadPositions = { [weak self] heads in
             guard let self, !self.speech.isEmpty else { return }
             self.heads = heads
@@ -95,9 +92,7 @@ final class AppModel {
         errorMessage = nil
         failedJobID = nil
         phase = .capturing
-        scene.detectionEnabled = false
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        defer { scene.detectionEnabled = true }
 
         let captured: CapturedPage
         do {
@@ -126,10 +121,8 @@ final class AppModel {
         errorMessage = nil
         failedJobID = nil
         phase = .making
-        scene.detectionEnabled = false
         Task {
-            defer { scene.detectionEnabled = true }
-            do {
+                do {
                 let job = try await backend.retry(id)
                 self.job = job
                 if let page { scene.beginPortal(for: page) }

@@ -12,18 +12,11 @@ final class SceneController: NSObject, ARSessionDelegate {
     private var portal: PaperPortal?
     private var updates: Cancellable?
     private let detectQueue = DispatchQueue(label: "page-detect", qos: .userInitiated)
-    private var detecting = false
-    private var lastDetect: TimeInterval = 0
     private var lastOverlay: TimeInterval = 0
 
-    /// Called ~5×/s with the paper outline in view coordinates (empty if none).
-    var onPageOutline: (([CGPoint]) -> Void)?
     /// Called ~30×/s with where each speaking character's head is on screen.
     var onHeadPositions: (([String: CGPoint]) -> Void)?
     var onSpeak: ((CharacterActor, String) -> Void)?
-    var detectionEnabled = true {
-        didSet { if !detectionEnabled { onPageOutline?([]) } }
-    }
 
     override init() {
         arView = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
@@ -63,29 +56,6 @@ final class SceneController: NSObject, ARSessionDelegate {
         }
     }
 
-    // MARK: Page detection
-
-    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        MainActor.assumeIsolated { self.maybeDetect(frame) }
-    }
-
-    private func maybeDetect(_ frame: ARFrame) {
-        guard detectionEnabled, !detecting, frame.timestamp - lastDetect > 0.2 else { return }
-        detecting = true
-        lastDetect = frame.timestamp
-        let buffer = frame.capturedImage
-        let toView = frame.viewPointMapper(orientation: interfaceOrientation, viewport: arView.bounds.size)
-        detectQueue.async { [weak self] in
-            let page = PageScanner.detect(in: buffer, viewTransform: toView)
-            let outline = page?.imageCorners.map(toView) ?? []
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.detecting = false
-                if self.detectionEnabled { self.onPageOutline?(outline) }
-            }
-        }
-    }
-
     private var interfaceOrientation: UIInterfaceOrientation {
         arView.window?.windowScene?.interfaceOrientation ?? .portrait
     }
@@ -97,44 +67,39 @@ final class SceneController: NSObject, ARSessionDelegate {
         var errorDescription: String? { "The camera isn't ready yet. Try again in a moment." }
     }
 
-    /// Takes a sharp still, finds the paper, rectifies it and measures it in the world.
+    /// Takes a sharp still of what's inside the on-screen frame, straightens it
+    /// to a square as seen on screen, finds the drawn figure in it, and measures
+    /// where that frame sits on the surface in the room.
     func capturePage() async throws -> CapturedPage {
         let frame = try await highResolutionFrame()
         let viewport = arView.bounds.size
-        let toView = frame.viewPointMapper(orientation: interfaceOrientation, viewport: viewport)
+        let t = frame.displayTransform(for: interfaceOrientation, viewportSize: viewport).inverted()
+        // View point -> camera image point in Vision's normalized space (origin bottom-left).
+        let toImage: (CGPoint) -> CGPoint = { v in
+            let n = CGPoint(x: v.x / viewport.width, y: v.y / viewport.height).applying(t)
+            return CGPoint(x: n.x, y: 1 - n.y)
+        }
+        let viewCorners = Reticle.corners(in: viewport)
+        let region = DetectedPage(imageCorners: viewCorners.map(toImage), confidence: 1)
         let buffer = frame.capturedImage
 
-        let detected = await withCheckedContinuation { (c: CheckedContinuation<DetectedPage?, Never>) in
-            detectQueue.async { c.resume(returning: PageScanner.detect(in: buffer, viewTransform: toView)) }
-        }
-
-        // Where are the corners in the room?
-        var world: [SIMD3<Float>] = []
-        if let detected {
-            world = detected.imageCorners.compactMap { raycast(toView($0)) }
-        }
+        // Where is the frame on the table?
+        var world = viewCorners.compactMap { raycast($0) }
         let measured = world.count == 4
         if !measured {
-            // No paper (or it can't be raycast yet): a portrait sheet in front of the camera.
-            let center = raycast(CGPoint(x: viewport.width / 2, y: viewport.height * 0.6))
+            // No surface found yet: a 20 cm square in front of the camera.
+            let center = raycast(CGPoint(x: Reticle.rect(in: viewport).midX, y: Reticle.rect(in: viewport).midY))
                 ?? (arView.cameraTransform.translation + arView.cameraTransform.rotation.act([0, -0.25, -0.45]))
             let forward = arView.cameraTransform.rotation.act([0, 0, -1])
             let z = simd_normalize(SIMD3<Float>(-forward.x, 0, -forward.z) + [0, 0, 0.0001])
             let x = simd_normalize(simd_cross([0, 1, 0], z))
-            let hw: Float = 0.105, hh: Float = 0.1485
-            world = [center - x * hw - z * hh, center + x * hw - z * hh, center + x * hw + z * hh, center - x * hw + z * hh]
+            let h: Float = 0.1
+            world = [center - x * h - z * h, center + x * h - z * h, center + x * h + z * h, center - x * h + z * h]
         }
         let (transform, size) = PageScanner.frame(from: world)
 
-        let aspect = CGFloat(size.x / max(size.y, 0.001))
         let result: (Data, CGImage)? = await withCheckedContinuation { c in
-            detectQueue.async {
-                if let detected {
-                    c.resume(returning: PageScanner.rectify(buffer, page: detected, aspect: aspect))
-                } else {
-                    c.resume(returning: PageScanner.centerCrop(buffer, toView: toView))
-                }
-            }
+            detectQueue.async { c.resume(returning: PageScanner.rectify(buffer, page: region, aspect: 1)) }
         }
         guard let result else { throw CaptureError.noFrame }
         let (jpeg, image) = result

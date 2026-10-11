@@ -120,10 +120,12 @@ enum PageScanner {
             CGRect(x: e.minX + e.width * inset, y: e.minY, width: e.width * depth, height: e.height),            // left
             CGRect(x: e.maxX - e.width * (inset + depth), y: e.minY, width: e.width * depth, height: e.height),  // right
         ]
-        // A margin can hold a doodle or a shadow: take the median strip by brightness.
+        // An edge can show the table, a doodle or a shadow; the brightest one is
+        // most likely bare paper. If even that is dark, there's no paper to
+        // calibrate against (a dark table all round): leave the colors alone.
         let samples = strips.compactMap { averageLinear(image, in: $0) }.sorted { $0.reduce(0, +) < $1.reduce(0, +) }
-        guard samples.count == 4 else { return image }
-        let paper = (0..<3).map { max(0.3, (samples[1][$0] + samples[2][$0]) / 2) }
+        guard let brightest = samples.last, (brightest.max() ?? 0) > 0.25 else { return image }
+        let paper = (0..<3).map { max(0.2, brightest[$0]) }
         let gain = CIFilter.colorMatrix()
         gain.inputImage = image
         gain.rVector = CIVector(x: 1 / paper[0], y: 0, z: 0, w: 0)
@@ -193,7 +195,9 @@ enum PageScanner {
                 }
             }
         }
-        // Connected shapes; keep the one with the most ink, favoring the middle of the page.
+        // Connected shapes; keep the one with the most ink near the middle of the
+        // frame. Shapes running into the frame's edge are usually something cut
+        // off (a paper edge, the table), so they count for much less.
         var label = [Int](repeating: -1, count: gw * gh)
         var best = (score: 0.0, id: -1)
         var count = 0
@@ -201,8 +205,11 @@ enum PageScanner {
             var stack = [start]
             label[start] = count
             var inkCount = 0, sx = 0, sy = 0
+            var touchesEdge = false
             while let i = stack.popLast() {
                 if ink[i] { inkCount += 1; sx += i % gw; sy += i / gw }
+                let ex = i % gw, ey = i / gw
+                if ex <= border + 1 || ey <= border + 1 || ex >= gw - border - 2 || ey >= gh - border - 2 { touchesEdge = true }
                 let x = i % gw, y = i / gw
                 for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
                 where nx >= 0 && ny >= 0 && nx < gw && ny < gh && grown[ny * gw + nx] && label[ny * gw + nx] < 0 {
@@ -213,7 +220,8 @@ enum PageScanner {
             if inkCount > 0 {
                 let cx = Double(sx) / Double(inkCount) / Double(gw) - 0.5
                 let cy = Double(sy) / Double(inkCount) / Double(gh) - 0.5
-                let score = Double(inkCount) * (1.2 - min(1, (cx * cx + cy * cy).squareRoot()))
+                let centered = max(0.05, 1 - 1.8 * (cx * cx + cy * cy).squareRoot())
+                let score = Double(inkCount) * centered * (touchesEdge ? 0.25 : 1)
                 if score > best.score { best = (score, count) }
             }
             count += 1

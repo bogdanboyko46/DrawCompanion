@@ -1,31 +1,53 @@
 import ReplayKit
 import SwiftUI
 
-/// A glowing outline on the detected paper, so you know it's been found.
-struct PageOutline: View {
-    var points: [CGPoint]
-
+/// The capture frame: corner brackets in the middle of the screen, with the
+/// rest of the view dimmed so it's clear only what's inside gets scanned.
+struct ReticleView: View {
     var body: some View {
-        TimelineView(.animation) { timeline in
-            canvas(pulse: 0.5 + 0.5 * sin(timeline.date.timeIntervalSinceReferenceDate * 5.5))
-        }
-    }
+        GeometryReader { geo in
+            let r = Reticle.rect(in: geo.size)
+            ZStack {
+                // Dim everything outside the frame.
+                Path { p in
+                    p.addRect(CGRect(origin: .zero, size: geo.size))
+                    p.addRoundedRect(in: r, cornerSize: CGSize(width: 18, height: 18))
+                }
+                .fill(Color.black.opacity(0.28), style: FillStyle(eoFill: true))
 
-    private func canvas(pulse: Double) -> some View {
-        Canvas { context, _ in
-            guard points.count == 4 else { return }
-            var path = Path()
-            path.addLines(points)
-            path.closeSubpath()
-            let color = Color(red: 1, green: 0.7, blue: 0.35)
-            context.fill(path, with: .color(color.opacity(0.05 + 0.08 * pulse)))
-            context.stroke(path, with: .color(color.opacity(0.35)), style: StrokeStyle(lineWidth: 10, lineJoin: .round))
-            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2.5, lineJoin: .round))
-            // Corner ticks.
-            for p in points {
-                context.fill(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)), with: .color(.white))
+                Brackets()
+                    .stroke(.white, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .frame(width: r.width, height: r.height)
+                    .position(x: r.midX, y: r.midY)
+                    .shadow(color: .black.opacity(0.35), radius: 3)
+
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .light))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .position(x: r.midX, y: r.midY)
+
+                Text("Center your drawing in the frame")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .position(x: r.midX, y: r.minY - 22)
             }
         }
+    }
+}
+
+private struct Brackets: Shape {
+    func path(in r: CGRect) -> Path {
+        let len = min(r.width, r.height) * 0.16
+        var p = Path()
+        for (corner, dx, dy) in [(CGPoint(x: r.minX, y: r.minY), 1.0, 1.0), (CGPoint(x: r.maxX, y: r.minY), -1.0, 1.0),
+                                 (CGPoint(x: r.maxX, y: r.maxY), -1.0, -1.0), (CGPoint(x: r.minX, y: r.maxY), 1.0, -1.0)] {
+            p.move(to: CGPoint(x: corner.x + dx * len, y: corner.y))
+            p.addLine(to: corner)
+            p.addLine(to: CGPoint(x: corner.x, y: corner.y + dy * len))
+        }
+        return p
     }
 }
 
