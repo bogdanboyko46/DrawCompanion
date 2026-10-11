@@ -39,6 +39,7 @@ final class SpeechListener: NSObject, SFSpeechRecognizerDelegate {
     private var generation = 0 // ignores callbacks from recognition tasks we've moved on from
     private var wanted = false // the user wants the mic on (survives pauses)
     private var engineRunning = false
+    private var engineStartedAt: TimeInterval = 0
     private var failures = 0 // consecutive recognition errors without a result
     private var retry: DispatchWorkItem?
     private var ticker: Timer?
@@ -123,6 +124,7 @@ final class SpeechListener: NSObject, SFSpeechRecognizerDelegate {
         engine.prepare()
         try engine.start()
         engineRunning = true
+        engineStartedAt = CACurrentMediaTime()
     }
 
     /// Stops audio and recognition but remembers whether the mic was wanted.
@@ -296,7 +298,10 @@ final class SpeechListener: NSObject, SFSpeechRecognizerDelegate {
             if self.wanted { self.scheduleRetry(after: 1) }
         }
         on(.AVAudioEngineConfigurationChange) { [weak self] note in
-            guard let self, note.object as AnyObject? === self.engine, self.wanted, self.state == .listening else { return }
+            // Starting the engine can itself post one of these; restarting
+            // for that would loop.
+            guard let self, note.object as AnyObject? === self.engine, self.wanted, self.state == .listening,
+                  CACurrentMediaTime() - self.engineStartedAt > 1 else { return }
             print("[DC] speech: audio configuration changed, restarting")
             self.suspend()
             self.scheduleRetry(after: 0.3)
