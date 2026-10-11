@@ -66,3 +66,11 @@ The close-ups here are cut from the 768 px photos, so they're softer than the ph
 - Relative placement: ball right of the legs, cloud above, grass under the feet.
 - Revisions of a shown outline: bigger, smaller, move left.
 - Filter: the "teeth to the smile while an arm is shown" confusion, other new-vs-revise pairs, hides, chatter.
+
+## Prompt variants
+
+`variants/` holds edited copies of `Prompts.swift` for `--prompts`:
+- `parts-max5.swift`: at most 5 nearby parts before the strokes (the parts list is written before the first stroke, so it delays the first line).
+- `no-parts.swift`: strokes only, no parts/place (the schema before the parts-first change; fastest, placement was worse in the lead's tests).
+
+They're snapshots: regenerate them if `Prompts.swift` changes (the commands are in `docs/status/ai.md`).

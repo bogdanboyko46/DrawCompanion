@@ -33,6 +33,8 @@ A speculative call cancelled after the filter is billed for its input (2 photos 
 
 ## Next (needs a key)
 
+Ready-made prompt variants: `eval/variants/parts-max5.swift` (at most 5 parts listed before the strokes: the parts list is written before the first stroke, roughly 30 tokens per part, so it directly delays the first line) and `eval/variants/no-parts.swift` (strokes only). Run with `--prompts eval/variants/<name>.swift`. They are snapshots of `Prompts.swift`; if it changes, regenerate: parts-max5 = edit the "parts" description; no-parts = delete the "parts" and "place" schema entries, the required names and the "First list the parts…" rule.
+
 1. `node eval/run.mjs filter` (old vs new prompt: `--prompts` with `git show a6ee6ca:ios/DrawCompanionAR/Core/Prompts.swift`).
 2. `node eval/run.mjs draw` baseline, then `--model opus`, `--effort medium`, `--thinking between_tools`, `--closeup none` / `900-50-0.15` / `1200-50-0.4`, `--cache`; keep whatever wins.
 3. Prompt caching: the drawing system prompt is ~900 tokens (above Sonnet 5.5's 512-token minimum) but the photos change every turn, so caching only saves the system prompt; with turns minutes apart the 5-minute cache mostly misses and writes cost 1.25x. Not enabled until `--cache` shows a gain.
