@@ -12,7 +12,7 @@ final class HeadsetOpticsTests: XCTestCase {
     }
 
     func testInverseRoundTrips() {
-        for e in stride(from: -1.2, through: 1.2, by: 0.05) {
+        for e in (-24...24).map({ Double($0) / 20 }) {
             XCTAssertEqual(optics.eyeTan(fromScreenTan: optics.screenTan(fromEyeTan: e)), e, accuracy: 1e-9)
         }
         // Barrel pre-distortion pulls the picture toward the lens center.
@@ -31,8 +31,8 @@ final class HeadsetOpticsTests: XCTestCase {
     func testStraightLinesComeOutStraight() {
         let layout = optics.layout(screenWidth: 2622, screenHeight: 1206)
         let eye = layout.eyes[0]
-        let points = stride(from: -0.7, through: 0.7, by: 0.1).map {
-            optics.screenPoint(eye: eye, layout: layout, eyeTanX: 0.5, eyeTanY: $0)
+        let points = (-7...7).map {
+            optics.screenPoint(eye: eye, layout: layout, eyeTanX: 0.5, eyeTanY: Double($0) / 10)
         }
         let xs = points.map(\.x)
         // Bowed on screen: farthest out in the middle (barrel).
