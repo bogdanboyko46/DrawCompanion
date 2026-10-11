@@ -379,7 +379,7 @@ final class AppModel: ObservableObject {
             let hint: String
             switch ar.lastMiss?.reason {
             case "page cut off by the view edge"?: hint = "Move back so the whole page is in view"
-            case "page unsure"?, "no page seen"?: hint = "Point at your paper"
+            case "page unsure"?, "no page seen"?: hint = "Show the whole page, hands off, for a second"
             default: hint = "Looking for paper"
             }
             if pageHint != hint { pageHint = hint }
