@@ -2,7 +2,7 @@ name: Checks
 
 on:
   push:
-    branches: ["claude/**", "main"]
+    branches: ["claude/**", "ar/**", "main"]
   pull_request:
   workflow_dispatch:
 
