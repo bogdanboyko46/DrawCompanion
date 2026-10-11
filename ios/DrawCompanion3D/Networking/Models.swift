@@ -16,6 +16,8 @@ struct CharacterJob: Codable, Identifiable, Equatable, Sendable {
     var thumbnailUrl: String?
     var character: CharacterInfo?
     var model: ModelInfo?
+    /// All views of the concept render (on-device only), for the turntable.
+    var conceptViews: [String]?
 
     enum Status: String, Codable, Sendable {
         case queued, running, ready, failed

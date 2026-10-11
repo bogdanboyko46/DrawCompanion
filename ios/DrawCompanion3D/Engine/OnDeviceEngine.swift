@@ -33,10 +33,11 @@ extension CharacterAPI: CharacterBackend {}
 actor OnDeviceEngine: CharacterBackend {
     static let shared = OnDeviceEngine()
 
-    // Settings, matching the server's defaults.
+    // Measured on a real drawing: meshy-6-lite from the three concept views
+    // builds the model in ~55 s (vs ~6 min for "latest" with remesh and PBR)
+    // with the same look on a phone, so a character takes under 2 minutes.
     private let imageModel = "nano-banana-pro"
-    private let meshModel = "latest"
-    private let polycount = 50_000
+    private let meshModel = "meshy-6-lite"
 
     private struct Work {
         var jpeg: Data
@@ -164,9 +165,13 @@ actor OnDeviceEngine: CharacterBackend {
                 let urls = done.image_urls ?? []
                 guard !urls.isEmpty else { throw MeshyClient.MeshyError(message: "The concept came back empty.") }
                 w.conceptViews = urls.count
+                var files: [String] = []
                 for (i, url) in urls.enumerated() {
-                    try await meshy.download(url, to: folder.appending(path: "view-\(i).png"))
+                    let file = folder.appending(path: "view-\(i).png")
+                    try await meshy.download(url, to: file)
+                    files.append(file.absoluteString)
                 }
+                jobs[id]?.conceptViews = files
                 // Until the check says which view is the front, guess the middle one.
                 showView(id, urls.count > 2 ? 1 : 0)
             }
@@ -206,12 +211,10 @@ actor OnDeviceEngine: CharacterBackend {
                 var body: [String: Any] = [
                     "ai_model": meshModel,
                     "should_texture": true,
-                    "enable_pbr": true,
+                    "enable_pbr": false,
+                    "should_remesh": false,
                     "texture_prompt": sheet.texture_prompt,
-                    "should_remesh": true,
-                    "target_polycount": polycount,
-                    "topology": "triangle",
-                    "target_formats": ["usdz", "glb"],
+                    "target_formats": ["usdz"],
                 ]
                 if let concept = w.conceptTask { body["input_task_id"] = concept } else { body["image_url"] = drawingURI }
                 w.sculptTask = try await meshy.create(endpoint, body: body)

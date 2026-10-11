@@ -139,6 +139,7 @@ final class AppModel {
         var job = start
         var misses = 0
         var shownConcept: String?
+        var turning = false
         var lifted = false
         while job.status == .queued || job.status == .running {
             try await Task.sleep(for: .seconds(1.2))
@@ -154,6 +155,21 @@ final class AppModel {
             if !lifted {
                 lifted = true
                 scene.liftPortal()
+            }
+            // Once the front view is known and the model is being built, turn the
+            // character in place on the paper using all its views.
+            if !turning, job.stage == GenerationStage.sculpt.rawValue, let views = job.conceptViews, views.count > 1 {
+                turning = true
+                let front = Int(job.conceptUrl?.split(separator: "#").last ?? "") ?? 0
+                let ordered = Array(views[front...] + views[..<front])
+                Task {
+                    var frames: [CGImage] = []
+                    for path in ordered {
+                        guard let image = try? await backend.image(at: path), let cg = image.cgImage else { continue }
+                        frames.append(await Task.detached { PageScanner.subjectCutout(cg) ?? cg }.value)
+                    }
+                    scene.startTurntable(frames)
+                }
             }
             // The concept can change once (when the front view is picked); show the latest.
             if let url = job.conceptUrl, url != shownConcept {

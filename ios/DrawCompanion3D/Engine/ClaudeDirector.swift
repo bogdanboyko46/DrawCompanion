@@ -8,7 +8,6 @@ import Foundation
 struct ClaudeDirector {
     var apiKey: String
     var model = "claude-opus-5-5"
-    var effort = "high"
 
     struct DirectorError: LocalizedError {
         var message: String
@@ -46,7 +45,7 @@ struct ClaudeDirector {
         var sheet: Sheet = try await call(
             system: Self.sheetSystem,
             content: [image("image/jpeg", jpeg), ["type": "text", "text": text]],
-            schema: Self.sheetSchema)
+            schema: Self.sheetSchema, effort: "medium")
         // Keep downstream APIs inside their limits whatever came back.
         sheet.name = String(sheet.name.trimmingCharacters(in: .whitespaces).prefix(40))
         if sheet.name.isEmpty { sheet.name = "Doodle" }
@@ -71,7 +70,7 @@ struct ClaudeDirector {
         return try await call(
             system: Self.reviewSystem,
             content: [image("image/jpeg", drawing)] + views.map { image($0.type, $0.data) } + [["type": "text", "text": text]],
-            schema: Self.reviewSchema)
+            schema: Self.reviewSchema, effort: "low")
     }
 
     // MARK: HTTP
@@ -80,7 +79,7 @@ struct ClaudeDirector {
         ["type": "image", "source": ["type": "base64", "media_type": mediaType, "data": data.base64EncodedString()]]
     }
 
-    private func call<T: Decodable>(system: String, content: [[String: Any]], schema: [String: Any]) async throws -> T {
+    private func call<T: Decodable>(system: String, content: [[String: Any]], schema: [String: Any], effort: String) async throws -> T {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 16000,
@@ -91,7 +90,7 @@ struct ClaudeDirector {
         ]
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.httpMethod = "POST"
-        request.timeoutInterval = 300 // high effort on an image can take a minute or more
+        request.timeoutInterval = 180
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")

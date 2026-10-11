@@ -26,6 +26,9 @@ final class PaperPortal {
     private var conceptFade: Float = -1
     private var dissolving: (start: TimeInterval, done: () -> Void)?
     private var dissolved = false
+    private var turntable: [CGImage] = []
+    private var turntableIndex = 0
+    private var lastTurn: TimeInterval = 0
     private let cardHeight: Float
 
     init(page: CapturedPage) {
@@ -101,6 +104,15 @@ final class PaperPortal {
         burst()
     }
 
+    /// While the 3D model is being built, cycle the concept's views (front,
+    /// side, back) on the card so the character seems to turn in place.
+    func startTurntable(_ frames: [CGImage]) {
+        guard frames.count > 1 else { return }
+        turntable = frames
+        turntableIndex = 0
+        lastTurn = time
+    }
+
     /// Pops the card and calls `done` at the moment the character should appear.
     func dissolve(done: @escaping () -> Void) {
         dissolved = true
@@ -148,6 +160,17 @@ final class PaperPortal {
             card.model?.materials = card.model?.materials.map { _ in
                 PaperPortal.cardMaterial(texture: cardTexture, alpha: 1 - 0.85 * smoothstep(conceptFade))
             } ?? []
+        }
+        if turntable.count > 1, !dissolved, conceptFade >= 1, time - lastTurn > 1.1 {
+            lastTurn = time
+            turntableIndex = (turntableIndex + 1) % turntable.count
+            let cg = turntable[turntableIndex]
+            let aspect = Float(cg.width) / Float(max(1, cg.height))
+            let next = PaperPortal.makeCard(image: cg, width: cardHeight * aspect, height: cardHeight)
+            next.position.z = 0.002
+            concept?.removeFromParent()
+            card.addChild(next)
+            concept = next
         }
         if let d = dissolving, time - d.start > 0.35 {
             dissolving = nil

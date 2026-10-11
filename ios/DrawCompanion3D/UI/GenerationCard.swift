@@ -44,7 +44,7 @@ struct GenerationCard: View {
             }
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text("\(elapsed(at: context.date)) · This usually takes 2–4 minutes. Keep the app open.")
+                Text("\(elapsed(at: context.date)) · \(remaining(at: context.date)) Keep the app open.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -76,6 +76,17 @@ struct GenerationCard: View {
         let all = model.stages
         guard let i = all.firstIndex(of: stage), let c = all.firstIndex(of: current) else { return .waiting }
         return i < c ? .done : (i == c ? .active : .waiting)
+    }
+
+    /// A rough countdown: blend the typical total with what the progress so far implies.
+    private func remaining(at date: Date) -> String {
+        let spent = date.timeIntervalSince(started)
+        let p = max(0.02, model.job?.progress ?? 0)
+        let typical = model.useServer ? 300.0 : 110.0
+        let implied = spent / p
+        let total = p < 0.3 ? typical : (typical + implied) / 2
+        let left = max(10, total - spent)
+        return left < 60 ? "Almost there." : "About \(Int((left / 60).rounded(.up))) min left."
     }
 
     private func elapsed(at date: Date) -> String {

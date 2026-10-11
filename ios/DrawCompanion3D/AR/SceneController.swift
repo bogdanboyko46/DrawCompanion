@@ -141,6 +141,8 @@ final class SceneController: NSObject, ARSessionDelegate {
 
     func showConcept(_ cutout: CGImage) { portal?.showConcept(cutout) }
 
+    func startTurntable(_ frames: [CGImage]) { portal?.startTurntable(frames) }
+
     func cancelPortal() {
         portal?.remove()
         portal = nil
