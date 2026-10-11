@@ -1,8 +1,16 @@
 # Headset session status
 
-**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`)
+**Branch: `claude/fervent-turing-1v3ob4`** (based on `ar/headset`; lead branch merged in at 4b8058f)
 
-## READY TO MERGE
+## Direction change noted
+Per the lead's status: headset view is off; focus is the normal full-screen AR view. Everything below (MSAA capsule lines, draw-on, 120 Hz, buffer reuse) already applies to the phone view too.
+
+## New: printed-ink look (phone view and headset) — CI pending
+The outline is now *multiplied* into the camera image instead of painted over it, the way real ink darkens paper: paper grain, lighting gradients and your hand's shadow show through the lines. The paper color is measured each frame from ~100 camera pixels just beside the outline (brighter half averaged, smoothed), and the line's transmittance = ink color ÷ paper color, so on average-lit paper the line is exactly the drawing's own measured ink color. Light ink on darker paper falls back to ordinary blending automatically. Math in `Core/HeadsetInk.swift`, tests in `CoreTests/HeadsetTests.swift`.
+- Toggle for A/B: UserDefaults Bool `outline.printedInk` (default true; `HeadsetInk.printedKey`). Applies live.
+- What to look for: lines should look like pencil on the page rather than a sticker; in a shadow they darken with the paper. Console prints `[DC] outline: paper measured r… g… b…; printed-ink look on` once.
+
+## Merged by the lead (29a3b0f): MSAA lines, draw-on, 120 Hz, headset optics
 
 Items 1–6 below: CI green on `29a3b0f` (run https://github.com/bogdanboyko46/DrawCompanion/actions/runs/38098105344: core tests incl. new `HeadsetTests`, iPhone build with no new warnings, web tests). Touches only my files plus new `Core/Headset*.swift` and `CoreTests/HeadsetTests.swift`. No changes needed in AppModel (the `Renderer.Scene` interface is unchanged).
 
@@ -45,6 +53,7 @@ Keys are also in code: `HeadsetOptics.Key.*`. Suggested Settings UI: sliders for
 Note on zoom: the old `Renderer.headsetZoom = 1.6` (of the screen half's height) is roughly `headset.zoom` 1.5 in the new terms. The new default 1.1 is a bit wider, which is easier for hand-eye coordination; raise it if the lead prefers the old look.
 
 ## Requests for the lead
+(1 and 2 done by the lead in ab500a8, thanks.)
 1. **120 Hz:** add `INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;` to both build configurations of the DrawCompanionAR target in `ios/DrawCompanionAR.xcodeproj/project.pbxproj` (next to the other `INFOPLIST_KEY_` lines). Without it iPhones cap the app at 60 Hz.
 2. **Per-frame allocation in `AppModel.scene()`:** with drift correction on it builds a new strokes array (and new points arrays) every frame. Cheaper: cache the mapped strokes and only rebuild when `outline` or `referenceToCurrent` changes (e.g. keep `mappedStrokes` + the map they were built for). The renderer now calls `scene()` only on frames it draws (≤60/s normally).
 3. `Renderer.headsetZoom` and `Renderer.viewports(...)` are gone (nothing else used them).

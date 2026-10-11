@@ -82,35 +82,57 @@ struct CapsuleFragment {
     uint mask [[sample_mask]];
 };
 
-// Lines fade almost out where ARKit sees a person (your hand and pen), so the
-// outline looks like it's on the paper, under your hand, not floating on top.
-fragment CapsuleFragment capsuleFragment(CapsuleOut in [[stage_in]],
-                                         constant StrokeUniforms &u [[buffer(0)]],
-                                         texture2d<float, access::sample> personMask [[texture(0)]]) {
-    float2 pixel = floor(in.position.xy);
-    float2 ab = in.b - in.a;
+// Which of the pixel's 4 MSAA samples lie inside the capsule (0 = none).
+static uint capsuleCoverage(float2 position, float2 a, float2 b, float radius, constant StrokeUniforms &u) {
+    float2 pixel = floor(position);
+    float2 ab = b - a;
     float denom = max(dot(ab, ab), 1e-6);
-    float r2 = in.radius * in.radius;
+    float r2 = radius * radius;
     uint mask = 0;
     for (uint i = 0; i < 4; i++) {
         float4 pair = u.samples[i / 2];
         float2 s = pixel + ((i & 1u) != 0 ? pair.zw : pair.xy);
-        float2 ap = s - in.a;
+        float2 ap = s - a;
         float t = clamp(dot(ap, ab) / denom, 0.0, 1.0);
         float2 q = ap - ab * t;
         if (dot(q, q) <= r2) mask |= 1u << i;
     }
-    if (mask == 0) discard_fragment();
+    return mask;
+}
 
-    float4 color = in.color;
-    if (u.target.z > 0.5) {
-        constexpr sampler s(address::clamp_to_edge, filter::linear);
-        float2 uv = mix(u.crop.xy, u.crop.zw, in.position.xy / u.target.xy);
-        float person = personMask.sample(s, uv).r;
-        color.a *= 1.0 - 0.85 * smoothstep(0.3, 0.7, person);
-    }
+// Lines fade almost out where ARKit sees a person (your hand and pen), so the
+// outline looks like it's on the paper, under your hand, not floating on top.
+static float handFade(float2 position, constant StrokeUniforms &u, texture2d<float, access::sample> personMask) {
+    if (u.target.z < 0.5) return 1.0;
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    float2 uv = mix(u.crop.xy, u.crop.zw, position / u.target.xy);
+    float person = personMask.sample(s, uv).r;
+    return 1.0 - 0.85 * smoothstep(0.3, 0.7, person);
+}
+
+// Ordinary blending: color = ink color, alpha = opacity.
+fragment CapsuleFragment capsuleFragment(CapsuleOut in [[stage_in]],
+                                         constant StrokeUniforms &u [[buffer(0)]],
+                                         texture2d<float, access::sample> personMask [[texture(0)]]) {
+    uint mask = capsuleCoverage(in.position.xy, in.a, in.b, in.radius, u);
+    if (mask == 0) discard_fragment();
     CapsuleFragment out;
-    out.color = color;
+    out.color = float4(in.color.rgb, in.color.a * handFade(in.position.xy, u, personMask));
+    out.mask = mask;
+    return out;
+}
+
+// Printed ink: multiplied into the camera image (blend = src * dst), so the
+// paper's lighting and texture show through. color = the ink's
+// transmittance, alpha = opacity.
+fragment CapsuleFragment capsuleFragmentMultiply(CapsuleOut in [[stage_in]],
+                                                 constant StrokeUniforms &u [[buffer(0)]],
+                                                 texture2d<float, access::sample> personMask [[texture(0)]]) {
+    uint mask = capsuleCoverage(in.position.xy, in.a, in.b, in.radius, u);
+    if (mask == 0) discard_fragment();
+    float a = in.color.a * handFade(in.position.xy, u, personMask);
+    CapsuleFragment out;
+    out.color = float4(mix(float3(1.0), in.color.rgb, a), 1.0);
     out.mask = mask;
     return out;
 }

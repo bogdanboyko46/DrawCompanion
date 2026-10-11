@@ -171,3 +171,39 @@ final class HeadsetStrokesTests: XCTestCase {
         XCTAssertGreaterThan(HeadsetStrokes.Arrivals.opacity(0), 0)
     }
 }
+
+final class HeadsetInkTests: XCTestCase {
+    func testCameraPixelToRGB() {
+        let grey = HeadsetInk.rgb(y: 128, cb: 128, cr: 128)
+        XCTAssertEqual(grey.x, 128 / 255, accuracy: 0.01)
+        XCTAssertEqual(grey.y, grey.x, accuracy: 0.01)
+        XCTAssertEqual(grey.z, grey.x, accuracy: 0.01)
+        let blue = HeadsetInk.rgb(y: 60, cb: 200, cr: 110)
+        XCTAssertGreaterThan(blue.z, blue.x)
+        let white = HeadsetInk.rgb(y: 255, cb: 255, cr: 255)
+        XCTAssertLessThanOrEqual(white.max(), 1) // clamped
+    }
+
+    func testPaperIgnoresLinesAndShadows() {
+        let paper = SIMD3<Float>(0.8, 0.78, 0.72)
+        var samples = Array(repeating: paper, count: 20)
+        samples += Array(repeating: SIMD3<Float>(0.3, 0.3, 0.32), count: 6) // pencil lines
+        samples += Array(repeating: SIMD3<Float>(0.5, 0.42, 0.38), count: 4) // hand
+        let estimate = HeadsetInk.paper(from: samples)!
+        XCTAssertEqual(estimate.x, 0.8, accuracy: 0.01)
+        XCTAssertEqual(estimate.z, 0.72, accuracy: 0.01)
+        XCTAssertNil(HeadsetInk.paper(from: [paper, paper]))
+    }
+
+    func testTransmittanceReproducesTheInkOnThatPaper() {
+        let paper = SIMD3<Float>(0.8, 0.78, 0.72), ink = SIMD3<Float>(0.3, 0.3, 0.35)
+        let t = HeadsetInk.transmittance(ink: ink, paper: paper)!
+        let printed = paper * t // multiply blend at full opacity
+        XCTAssertEqual(printed.x, ink.x, accuracy: 1e-5)
+        XCTAssertEqual(printed.z, ink.z, accuracy: 1e-5)
+        // In the hand's shadow (paper at half brightness) the line darkens too.
+        XCTAssertEqual((paper * 0.5 * t).x, ink.x * 0.5, accuracy: 1e-5)
+        // Light ink on darker paper: use ordinary blending instead.
+        XCTAssertNil(HeadsetInk.transmittance(ink: SIMD3(0.9, 0.9, 0.9), paper: SIMD3(0.5, 0.5, 0.5)))
+    }
+}
